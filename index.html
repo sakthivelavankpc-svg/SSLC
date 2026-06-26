@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+  <meta charset="UTF-8">
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Student Quiz App</title>
+
+  <link rel="stylesheet" href="style.css">
+
+  <!-- Papa Parse CSV Reader -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <!-- jsPDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+</head>
+
+<body>
+
+  <div class="container">
+
+    <!-- HEADER -->
+
+    <header>
+
+      <h1>🎓 STUDENT QUIZ APP</h1>
+
+      <button id="darkModeBtn">
+
+        🌙 Dark Mode
+
+      </button>
+
+    </header>
+
+
+
+    <!-- HOME PAGE -->
+
+    <section id="homePage">
+
+      <div class="card">
+
+        <h2>Student Details</h2>
+
+        <input
+
+          type="text"
+
+          id="studentName"
+
+          placeholder="Enter Student Name"
+
+        >
+
+
+        <input
+
+          type="number"
+
+          id="questionLimit"
+
+          placeholder="Questions to Ask (Example: 50)"
+
+          min="1"
+
+        >
+
+
+        <input
+
+          type="number"
+
+          id="quizTime"
+
+          placeholder="Quiz Time in Minutes"
+
+          value="30"
+
+          min="1"
+
+        >
+
+
+        <label class="checkbox">
+
+          <input
+
+            type="checkbox"
+
+            id="shuffleQuestions"
+
+          >
+
+          Shuffle Questions
+
+        </label>
+
+      </div>
+
+
+
+      <!-- CSV Upload -->
+
+      <div class="card">
+
+        <h2>Upload CSV Quiz</h2>
+
+        <input
+
+          type="file"
+
+          id="csvFile"
+
+          accept=".csv"
+
+        >
+
+        <br><br>
+
+        <button id="uploadBtn">
+
+          Start Uploaded Quiz
+
+        </button>
+
+      </div>
+
+
+
+      <!-- PUBLIC QUIZZES -->
+
+      <div class="card">
+
+        <h2>Public Quizzes</h2>
+
+
+
+        <div class="quizList">
+
+          <button
+
+            class="quizBtn"
+
+            data-file="quizzes/synonyms.csv">
+
+            Synonyms
+
+          </button>
+
+
+
+          <button
+
+            class="quizBtn"
+
+            data-file="quizzes/antonyms.csv">
+
+            Antonyms
+
+          </button>
+
+
+
+          <button
+
+            class="quizBtn"
+
+            data-file="quizzes/physics.csv">
+
+            Physics
+
+          </button>
+
+
+
+          <button
+
+            class="quizBtn"
+
+            data-file="quizzes/biology.csv">
+
+            Biology
+
+          </button>
+
+
+
+          <button
+
+            class="quizBtn"
+
+            data-file="quizzes/chemistry.csv">
+
+            Chemistry
+
+          </button>
+
+        </div>
+
+      </div>
+
+
+
+      <!-- SAVED QUIZZES -->
+
+      <div class="card">
+
+        <h2>Saved Quizzes</h2>
+
+        <div id="savedQuizList">
+
+          No Saved Quizzes
+
+        </div>
+
+      </div>
+
+    </section>
+
+
+
+
+
+    <!-- QUIZ PAGE -->
+
+    <section
+
+      id="quizPage"
+
+      style="display:none;"
+
+    >
+
+
+      <div class="topBar">
+
+        <h2 id="quizTitle">
+
+          Quiz
+
+        </h2>
+
+
+        <div id="timer">
+
+          00:00
+
+        </div>
+
+      </div>
+
+
+
+
+      <div class="questionCard">
+
+
+        <div id="questionNumber">
+
+          Question 1 of 50
+
+        </div>
+
+
+
+        <h3 id="questionText">
+
+          Question
+
+        </h3>
+
+
+
+        <div id="optionsContainer">
+
+        </div>
+
+      </div>
+
+
+
+
+      <!-- PALETTE -->
+
+      <div class="paletteCard">
+
+        <h3>
+
+          Question Palette
+
+        </h3>
+
+        <div id="questionPalette">
+
+        </div>
+
+      </div>
+
+
+
+
+
+      <!-- NAVIGATION -->
+
+      <div class="navigationButtons">
+
+        <button id="prevBtn">
+
+          Previous
+
+        </button>
+
+
+
+        <button id="nextBtn">
+
+          Next
+
+        </button>
+
+
+
+        <button id="submitBtn">
+
+          Submit Quiz
+
+        </button>
+
+      </div>
+
+    </section>
+
+
+
+
+
+
+    <!-- RESULT PAGE -->
+
+    <section
+
+      id="resultPage"
+
+      style="display:none;"
+
+    >
+
+      <div class="card">
+
+
+
+        <h1>
+
+          RESULT
+
+        </h1>
+
+
+
+        <table class="resultTable">
+
+          <tr>
+
+            <td>
+
+              Student
+
+            </td>
+
+            <td id="resultStudent">
+
+            </td>
+
+          </tr>
+
+
+
+          <tr>
+
+            <td>
+
+              Quiz
+
+            </td>
+
+            <td id="resultQuiz">
+
+            </td>
+
+          </tr>
+
+
+
+          <tr>
+
+            <td>
+
+              Date
+
+            </td>
+
+            <td id="resultDate">
+
+            </td>
+
+          </tr>
+
+
+
+          <tr>
+
+            <td>
+
+              Total Questions
+
+            </td>
+
+            <td id="resultTotal">
+
+            </td>
+
+          </tr>
+
+
+
+          <tr>
+
+            <td>
+
+              Correct
+
+            </td>
+
+            <td id="resultCorrect">
+
+            </td>
+
+          </tr>
+
+
+
+          <tr>
+
+            <td>
+
+              Wrong
+
+            </td>
+
+            <td id="resultWrong">
+
+            </td>
+
+          </tr>
+
+
+
+          <tr>
+
+            <td>
+
+              Score
+
+            </td>
+
+            <td id="resultScore">
+
+            </td>
+
+          </tr>
+
+
+
+          <tr>
+
+            <td>
+
+              Status
+
+            </td>
+
+            <td id="resultStatus">
+
+            </td>
+
+          </tr>
+
+        </table>
+
+
+
+
+        <div class="resultButtons">
+
+
+          <button id="downloadPdfBtn">
+
+            Download PDF
+
+          </button>
+
+
+
+          <button id="reviewBtn">
+
+            Review Answers
+
+          </button>
+
+
+
+          <button id="homeBtn">
+
+            Home
+
+          </button>
+
+
+        </div>
+
+      </div>
+
+    </section>
+
+
+
+
+
+
+
+    <!-- REVIEW PAGE -->
+
+    <section
+
+      id="reviewPage"
+
+      style="display:none;"
+
+    >
+
+      <div class="card">
+
+        <h1>
+
+          Review Answers
+
+        </h1>
+
+
+        <div id="reviewContainer">
+
+        </div>
+
+
+        <button id="reviewHomeBtn">
+
+          Home
+
+        </button>
+
+      </div>
+
+    </section>
+
+
+
+  </div>
+
+
+
+  <script src="script.js"></script>
+
+</body>
+
+</html>

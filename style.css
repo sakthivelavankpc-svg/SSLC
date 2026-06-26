@@ -1,0 +1,588 @@
+/* ===== RESET ===== */
+
+*{
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
+}
+
+body{
+
+    font-family:Arial, Helvetica, sans-serif;
+
+    background:#f2f2f2;
+
+    color:#222;
+
+    transition:0.3s;
+
+}
+
+
+/* ===== DARK MODE ===== */
+
+body.dark{
+
+    background:#121212;
+
+    color:#ffffff;
+
+}
+
+
+body.dark .card{
+
+    background:#1e1e1e;
+
+    color:#ffffff;
+
+}
+
+
+body.dark input{
+
+    background:#2a2a2a;
+
+    color:#fff;
+
+    border:1px solid #555;
+
+}
+
+
+body.dark button{
+
+    background:#333;
+
+    color:#fff;
+
+}
+
+
+body.dark .option{
+
+    background:#1e1e1e;
+
+    border:1px solid #555;
+
+}
+
+
+/* ===== CONTAINER ===== */
+
+.container{
+
+    max-width:900px;
+
+    margin:auto;
+
+    padding:20px;
+
+}
+
+
+/* ===== HEADER ===== */
+
+header{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:center;
+
+    margin-bottom:20px;
+
+}
+
+
+header h1{
+
+    font-size:30px;
+
+}
+
+
+#darkModeBtn{
+
+    padding:10px 15px;
+
+}
+
+
+/* ===== CARD ===== */
+
+.card{
+
+    background:#fff;
+
+    padding:20px;
+
+    margin-bottom:20px;
+
+    border-radius:15px;
+
+    box-shadow:
+
+    0 2px 10px
+
+    rgba(0,0,0,0.1);
+
+}
+
+
+/* ===== INPUT ===== */
+
+input[type=text],
+
+input[type=number],
+
+input[type=file]{
+
+    width:100%;
+
+    padding:12px;
+
+    margin-top:10px;
+
+    margin-bottom:15px;
+
+    border:1px solid #ccc;
+
+    border-radius:8px;
+
+    font-size:16px;
+
+}
+
+
+.checkbox{
+
+    display:block;
+
+    margin-bottom:15px;
+
+}
+
+
+.checkbox input{
+
+    margin-right:10px;
+
+}
+
+
+/* ===== BUTTON ===== */
+
+button{
+
+    padding:12px 20px;
+
+    border:none;
+
+    border-radius:10px;
+
+    cursor:pointer;
+
+    font-size:16px;
+
+    transition:0.3s;
+
+}
+
+
+button:hover{
+
+    transform:scale(1.03);
+
+}
+
+
+/* ===== QUIZ LIST ===== */
+
+.quizList{
+
+    display:flex;
+
+    flex-wrap:wrap;
+
+    gap:10px;
+
+}
+
+
+.quizBtn{
+
+    min-width:120px;
+
+}
+
+
+/* ===== QUIZ PAGE ===== */
+
+.topBar{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:center;
+
+    margin-bottom:20px;
+
+}
+
+
+#timer{
+
+    font-size:24px;
+
+    font-weight:bold;
+
+}
+
+
+.questionCard{
+
+    background:#fff;
+
+    padding:20px;
+
+    border-radius:15px;
+
+    margin-bottom:20px;
+
+}
+
+
+body.dark .questionCard{
+
+    background:#1e1e1e;
+
+}
+
+
+#questionNumber{
+
+    margin-bottom:10px;
+
+    font-weight:bold;
+
+}
+
+
+#questionText{
+
+    margin-bottom:20px;
+
+    line-height:1.6;
+
+}
+
+
+/* ===== OPTIONS ===== */
+
+.option{
+
+    display:block;
+
+    padding:15px;
+
+    margin-bottom:15px;
+
+    border:
+
+    1px solid #ddd;
+
+    border-radius:10px;
+
+    cursor:pointer;
+
+    transition:0.2s;
+
+}
+
+
+.option:hover{
+
+    transform:scale(1.01);
+
+}
+
+
+.option input{
+
+    margin-right:10px;
+
+}
+
+
+/* ===== PALETTE ===== */
+
+.paletteCard{
+
+    background:#fff;
+
+    padding:20px;
+
+    border-radius:15px;
+
+    margin-bottom:20px;
+
+}
+
+
+body.dark .paletteCard{
+
+    background:#1e1e1e;
+
+}
+
+
+#questionPalette{
+
+    display:flex;
+
+    flex-wrap:wrap;
+
+    gap:10px;
+
+    margin-top:15px;
+
+}
+
+
+.paletteBtn{
+
+    width:45px;
+
+    height:45px;
+
+    border-radius:50%;
+
+    border:none;
+
+    font-weight:bold;
+
+}
+
+
+/* current */
+
+.paletteCurrent{
+
+    background:#2196F3;
+
+    color:white;
+
+}
+
+
+/* answered */
+
+.paletteAnswered{
+
+    background:#4CAF50;
+
+    color:white;
+
+}
+
+
+/* unanswered */
+
+.paletteUnanswered{
+
+    background:#e0e0e0;
+
+}
+
+
+/* ===== NAVIGATION ===== */
+
+.navigationButtons{
+
+    display:flex;
+
+    justify-content:center;
+
+    gap:15px;
+
+    flex-wrap:wrap;
+
+}
+
+
+/* ===== RESULT ===== */
+
+.resultTable{
+
+    width:100%;
+
+    border-collapse:collapse;
+
+    margin-top:20px;
+
+}
+
+
+.resultTable td{
+
+    border:1px solid #ddd;
+
+    padding:12px;
+
+}
+
+
+body.dark .resultTable td{
+
+    border:1px solid #555;
+
+}
+
+
+.resultButtons{
+
+    margin-top:25px;
+
+    display:flex;
+
+    justify-content:center;
+
+    gap:15px;
+
+    flex-wrap:wrap;
+
+}
+
+
+/* ===== REVIEW ===== */
+
+.reviewItem{
+
+    border:1px solid #ddd;
+
+    padding:15px;
+
+    border-radius:10px;
+
+    margin-bottom:20px;
+
+}
+
+
+body.dark .reviewItem{
+
+    border:1px solid #555;
+
+}
+
+
+.reviewQuestion{
+
+    font-weight:bold;
+
+    margin-bottom:10px;
+
+}
+
+
+.correct{
+
+    color:green;
+
+    font-weight:bold;
+
+}
+
+
+.wrong{
+
+    color:red;
+
+    font-weight:bold;
+
+}
+
+
+/* ===== MOBILE ===== */
+
+@media(max-width:768px){
+
+    header{
+
+        flex-direction:column;
+
+        gap:15px;
+
+    }
+
+
+    header h1{
+
+        font-size:24px;
+
+        text-align:center;
+
+    }
+
+
+    .topBar{
+
+        flex-direction:column;
+
+        gap:10px;
+
+    }
+
+
+    #timer{
+
+        font-size:20px;
+
+    }
+
+
+    .navigationButtons{
+
+        flex-direction:column;
+
+    }
+
+
+    .navigationButtons button{
+
+        width:100%;
+
+    }
+
+
+    .resultButtons{
+
+        flex-direction:column;
+
+    }
+
+
+    .resultButtons button{
+
+        width:100%;
+
+    }
+
+
+    .quizList{
+
+        flex-direction:column;
+
+    }
+
+
+    .quizBtn{
+
+        width:100%;
+
+    }
+
+}
