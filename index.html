@@ -1,580 +1,241 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-
 <head>
-
-  <meta charset="UTF-8">
-
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-  <title>Student Quiz App</title>
-
-  <link rel="stylesheet" href="style.css">
-
-  <!-- Papa Parse CSV Reader -->
-  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-
-  <!-- jsPDF -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Quiz Master Pro</title>
+  
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght=300;400;600;700&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+  
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.4.4/lz-string.min.js"></script>
 </head>
-
 <body>
 
-  <div class="container">
-
-    <!-- HEADER -->
-
-    <header>
-
-      <h1>🎓 STUDENT QUIZ APP</h1>
-
-      <button id="darkModeBtn">
-
-        🌙 Dark Mode
-
-      </button>
-
-    </header>
-
-
-
-    <!-- HOME PAGE -->
-
-    <section id="homePage">
-
-      <div class="card">
-
-        <h2>Student Details</h2>
-
-        <input
-
-          type="text"
-
-          id="studentName"
-
-          placeholder="Enter Student Name"
-
-        >
-
-
-        <input
-
-          type="number"
-
-          id="questionLimit"
-
-          placeholder="Questions to Ask (Example: 50)"
-
-          min="1"
-
-        >
-
-
-        <input
-
-          type="number"
-
-          id="quizTime"
-
-          placeholder="Quiz Time in Minutes"
-
-          value="30"
-
-          min="1"
-
-        >
-
-
-        <label class="checkbox">
-
-          <input
-
-            type="checkbox"
-
-            id="shuffleQuestions"
-
-          >
-
-          Shuffle Questions
-
-        </label>
-
-      </div>
-
-
-
-      <!-- CSV Upload -->
-
-      <div class="card">
-
-        <h2>Upload CSV Quiz</h2>
-
-        <input
-
-          type="file"
-
-          id="csvFile"
-
-          accept=".csv"
-
-        >
-
-        <br><br>
-
-        <button id="uploadBtn">
-
-          Start Uploaded Quiz
-
-        </button>
-
-      </div>
-
-
-
-      <!-- PUBLIC QUIZZES -->
-
-      <div class="card">
-
-        <h2>Public Quizzes</h2>
-
-
-
-        <div class="quizList">
-
-          <button
-
-            class="quizBtn"
-
-            data-file="quizzes/synonyms.csv">
-
-            Synonyms
-
-          </button>
-
-
-
-          <button
-
-            class="quizBtn"
-
-            data-file="quizzes/antonyms.csv">
-
-            Antonyms
-
-          </button>
-
-
-
-          <button
-
-            class="quizBtn"
-
-            data-file="quizzes/physics.csv">
-
-            Physics
-
-          </button>
-
-
-
-          <button
-
-            class="quizBtn"
-
-            data-file="quizzes/biology.csv">
-
-            Biology
-
-          </button>
-
-
-
-          <button
-
-            class="quizBtn"
-
-            data-file="quizzes/chemistry.csv">
-
-            Chemistry
-
-          </button>
-
+  <div id="toastContainer" class="toast-container"></div>
+
+  <header class="app-header">
+    <div class="header-content">
+      <div class="logo-area">
+        <div class="logo-icon">📘</div>
+        <div>
+            <h1>Quiz Master (v16) <br> <a href="https://www.youtube.com/@KALVIKADAL" target="_blank"> KALVI KADAL</a></h1>
+            <span class="subtitle">Create. Share. Learn.</span>
         </div>
-
       </div>
+      <div class="header-actions">
+        <button id="toggleCreatorBtn" class="btn-icon" title="Toggle Creator Mode"><i class="ri-edit-box-line"></i></button>
+        <button id="themeToggleBtn" class="btn-icon" title="Toggle Theme"><i class="ri-moon-line"></i></button>
+      </div>
+    </div>
+  </header>
 
-
-
-      <!-- SAVED QUIZZES -->
-
-      <div class="card">
-
-        <h2>Saved Quizzes</h2>
-
-        <div id="savedQuizList">
-
-          No Saved Quizzes
-
+  <main class="container" id="appContainer">
+    
+    <div id="studentInfoDisplay" class="student-badge hidden">
+        <div class="badge-icon">🎓</div>
+        <div class="badge-text">
+            <span id="dispName" class="name">Student</span>
+            <span id="dispPlace" class="place">Unknown</span>
         </div>
+    </div>
 
+    <section id="librarySection" class="panel">
+      <div class="section-header">
+        <h3><i class="ri-community-line"></i> Global Quiz Library</h3>
+        <span class="badge-count" id="libCount">Loading...</span>
       </div>
 
+      <div class="library-controls">
+          <input type="text" id="libSearch" class="search-input" placeholder="🔍 Search quizzes..." />
+          <select id="filterSubject" class="filter-select">
+              <option value="all">All Subjects</option>
+          </select>
+          <select id="filterClass" class="filter-select">
+              <option value="all">All Classes</option>
+          </select>
+      </div>
+      
+      <div id="libraryGrid" class="library-grid"></div>
     </section>
 
-
-
-
-
-    <!-- QUIZ PAGE -->
-
-    <section
-
-      id="quizPage"
-
-      style="display:none;"
-
-    >
-
-
-      <div class="topBar">
-
-        <h2 id="quizTitle">
-
-          Quiz
-
-        </h2>
-
-
-        <div id="timer">
-
-          00:00
-
+   <div id="creatorPanel" class="creator-panel hidden">
+        <div class="panel-header">
+            <h3>🛠️ Creator Studio</h3>
+            <button id="closeCreatorBtn" class="btn-text">Close</button>
         </div>
 
-      </div>
-
-
-
-
-      <div class="questionCard">
-
-
-        <div id="questionNumber">
-
-          Question 1 of 50
-
+        <div class="config-card">
+            <h4><i class="ri-user-settings-line"></i> Creator & Quiz Info</h4>
+            <div class="input-grid">
+                <div class="input-group">
+                    <label>Creator Name</label>
+                    <input id="creatorName" type="text" placeholder="e.g. Mr. John Doe" />
+                </div>
+                <div class="input-group">
+                    <label style="color:var(--danger); font-weight:bold;">Set Secret Password</label>
+                    <input id="creatorPassword" type="text" placeholder="Required to Edit/Delete" />
+                </div>
+            </div>
+            <div class="input-grid three-col">
+                <div class="input-group">
+                    <label>Exam Name</label>
+                    <input id="metaExam" type="text" placeholder="e.g. Mid-Term" />
+                </div>
+                <div class="input-group">
+                    <label>Subject</label>
+                    <input id="metaSubject" type="text" placeholder="e.g. English" />
+                </div>
+                <div class="input-group">
+                    <label>Class/Grade</label>
+                    <input id="metaClass" type="text" placeholder="e.g. 10th" />
+                </div>
+            </div>
+            <div class="input-group full-width">
+                <label>Topic / Chapter</label>
+                <input id="metaTopic" type="text" placeholder="e.g. Synonyms & Antonyms" />
+            </div>
+            <div class="input-group full-width">
+                 <label>Creator Email (Optional)</label>
+                 <input id="creatorEmail" type="email" placeholder="john@example.com" />
+            </div>
         </div>
 
-
-
-        <h3 id="questionText">
-
-          Question
-
-        </h3>
-
-
-
-        <div id="optionsContainer">
-
+        <div class="config-card">
+            <h4><i class="ri-settings-3-line"></i> Rules & Settings</h4>
+            <div class="input-grid three-col">
+                <div class="input-group">
+                    <label>Time (mins)</label>
+                    <input id="totalMinutes" type="number" placeholder="Unlimited" />
+                </div>
+                <div class="input-group">
+                    <label>Total Marks</label>
+                    <input id="totalMarks" type="number" value="100" />
+                </div>
+                <div class="input-group">
+                    <label>Per Q (sec)</label>
+                    <input id="perQuestionSeconds" type="number" placeholder="Off" />
+                </div>
+                <div class="input-group">
+                    <label>Pass Mark</label>
+                    <input id="minPassMarks" type="number" value="40" />
+                </div>
+            </div>
+            <div class="checkbox-wrapper" style="margin:10px 0;">
+                <label><input type="checkbox" id="shuffleQuestions" /> <span>🔀 Shuffle Questions</span></label>
+            </div>
+            <input id="teacherWhatsapp" type="text" class="full-width" placeholder="Teacher WhatsApp for Results" />
         </div>
 
-      </div>
-
-
-
-
-      <!-- PALETTE -->
-
-      <div class="paletteCard">
-
-        <h3>
-
-          Question Palette
-
-        </h3>
-
-        <div id="questionPalette">
-
+        <div class="action-bar" style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 15px;">
+            <input id="csvFileInput" type="file" accept=".csv" hidden />
+            <button id="loadCSVBtn" class="btn-secondary"><i class="ri-file-upload-line"></i> Upload CSV</button>
+            <button id="createManualBtn" class="btn-secondary"><i class="ri-keyboard-line"></i> Manual</button>
+            <button id="saveToLibraryBtn" class="btn-primary"><i class="ri-save-3-line"></i> Save Quiz</button>
+            <button id="shareQuizBtn" class="btn-accent"><i class="ri-share-line"></i> Share Link</button>
         </div>
 
-      </div>
+        <section id="manualSection" class="sub-panel hidden">
+          <div class="sub-header" style="display:flex; justify-content:space-between; align-items:center; margin-top:15px;">
+              <h4>Manual Editor (Supports HTML tags like &lt;b&gt;, &lt;i&gt;, &lt;u&gt;)</h4>
+              <button id="addRowBtn" class="btn-sm btn-secondary"><i class="ri-add-line"></i> Add Row</button>
+          </div>
+          <div class="table-wrapper">
+            <table id="manualTable">
+                <thead><tr><th>#</th><th>Question Text</th><th>Option A</th><th>Option B</th><th>Option C</th><th>Option D</th><th>Ans Text</th><th>X</th></tr></thead>
+                <tbody></tbody>
+            </table>
+          </div>
+          <button id="startQuizBtn_manual" class="btn-full play-btn">🚀 Test Manual Quiz</button>
+        </section>
 
+        <section id="csvPreview" class="sub-panel hidden">
+          <h4>CSV Preview</h4>
+          <button id="saveCsvToLibBtn" class="btn-full btn-primary" style="margin-bottom:10px;">💾 Save Uploaded Quiz</button>
+          <div id="csvTableContainer" class="table-wrapper"></div>
+          <button id="startQuizBtn_csv" class="btn-full play-btn">🚀 Test CSV Quiz</button>
+        </section>
+    </div>
 
+    <div id="studentLoginModal" class="modal-overlay hidden">
+        <div class="modal-card bounce-in">
+            <div class="modal-icon">🎓</div>
+            <h3>Student Login</h3>
+            <p>Enter your details to begin the assessment</p>
+            <input type="text" id="studentName" placeholder="Full Name" />
+            <input type="text" id="studentPlace" placeholder="City / School Class" />
+            <button id="startStudentQuizBtn" class="btn-primary btn-large" style="width:100%; margin-top:10px; padding:12px;">Start Quiz</button>
+        </div>
+    </div>
 
+    <div id="shareModal" class="modal-overlay hidden">
+        <div class="modal-card bounce-in">
+            <div class="modal-icon">🔗</div>
+            <h3>Share Quiz</h3>
+            <p>Send this deployment link directly to your students:</p>
+            <textarea id="shareLinkInput" readonly style="height:100px; resize:none;"></textarea>
+            <div class="modal-row" style="display:flex; gap:10px; margin-top:10px;">
+                <button id="copyLinkBtn" class="btn-primary" style="flex:1;">Copy Link</button>
+                <button id="closeShareBtn" class="btn-secondary" style="flex:1;">Close</button>
+            </div>
+        </div>
+    </div>
 
+    <section id="quizSection" class="quiz-interface hidden">
+        <div class="quiz-top-bar">
+            <div class="timer-badge">
+                <i class="ri-timer-flash-line"></i> <span id="mainTimerLabel">00:00</span>
+            </div>
+            <div class="progress-track">
+                <div class="progress-info">
+                    <span id="questionProgressLabel">Q 1/10</span>
+                    <span id="liveScore">Score: 0</span>
+                </div>
+                <div class="progress-bar"><div id="progressBarFill"></div></div>
+            </div>
+        </div>
 
-      <!-- NAVIGATION -->
+        <div class="question-card">
+            <div class="q-header" style="display:flex; justify-content:space-between;">
+                <span id="timerPerQ" class="per-q-timer hidden">--</span>
+                <div></div>
+            </div>
+            <div id="questionBox" class="q-text"></div>
+        </div>
 
-      <div class="navigationButtons">
+        <div id="optionsBox" class="options-grid"></div>
 
-        <button id="prevBtn">
-
-          Previous
-
-        </button>
-
-
-
-        <button id="nextBtn">
-
-          Next
-
-        </button>
-
-
-
-        <button id="submitBtn">
-
-          Submit Quiz
-
-        </button>
-
-      </div>
-
+        <div class="quiz-nav-bar">
+            <button id="prevBtn" class="nav-btn"><i class="ri-arrow-left-line"></i></button>
+            <button id="nextBtn" class="nav-btn"><i class="ri-arrow-right-line"></i></button>
+            <button id="finishBtn" class="finish-btn">Submit Quiz</button>
+        </div>
     </section>
 
-
-
-
-
-
-    <!-- RESULT PAGE -->
-
-    <section
-
-      id="resultPage"
-
-      style="display:none;"
-
-    >
-
-      <div class="card">
-
-
-
-        <h1>
-
-          RESULT
-
-        </h1>
-
-
-
-        <table class="resultTable">
-
-          <tr>
-
-            <td>
-
-              Student
-
-            </td>
-
-            <td id="resultStudent">
-
-            </td>
-
-          </tr>
-
-
-
-          <tr>
-
-            <td>
-
-              Quiz
-
-            </td>
-
-            <td id="resultQuiz">
-
-            </td>
-
-          </tr>
-
-
-
-          <tr>
-
-            <td>
-
-              Date
-
-            </td>
-
-            <td id="resultDate">
-
-            </td>
-
-          </tr>
-
-
-
-          <tr>
-
-            <td>
-
-              Total Questions
-
-            </td>
-
-            <td id="resultTotal">
-
-            </td>
-
-          </tr>
-
-
-
-          <tr>
-
-            <td>
-
-              Correct
-
-            </td>
-
-            <td id="resultCorrect">
-
-            </td>
-
-          </tr>
-
-
-
-          <tr>
-
-            <td>
-
-              Wrong
-
-            </td>
-
-            <td id="resultWrong">
-
-            </td>
-
-          </tr>
-
-
-
-          <tr>
-
-            <td>
-
-              Score
-
-            </td>
-
-            <td id="resultScore">
-
-            </td>
-
-          </tr>
-
-
-
-          <tr>
-
-            <td>
-
-              Status
-
-            </td>
-
-            <td id="resultStatus">
-
-            </td>
-
-          </tr>
-
-        </table>
-
-
-
-
-        <div class="resultButtons">
-
-
-          <button id="downloadPdfBtn">
-
-            Download PDF
-
-          </button>
-
-
-
-          <button id="reviewBtn">
-
-            Review Answers
-
-          </button>
-
-
-
-          <button id="homeBtn">
-
-            Home
-
-          </button>
-
-
-        </div>
-
+    <section id="reviewSection" class="panel hidden">
+      <div class="result-header" style="text-align:center;">
+          <h3>🎉 Quiz Completed</h3>
+          <div class="score-circle" style="width:100px; height:100px; border-radius:50%; background:var(--secondary); display:flex; flex-direction:column; justify-content:center; align-items:center; margin:15px auto;">
+              <span id="finalScoreDisplay" style="font-size:1.8rem; font-weight:bold;">0</span>
+              <small>Score</small>
+          </div>
+          <div id="passFailText" class="result-status" style="font-weight:bold; font-size:1.2rem; margin-bottom:15px;">--</div>
       </div>
 
-    </section>
-
-
-
-
-
-
-
-    <!-- REVIEW PAGE -->
-
-    <section
-
-      id="reviewPage"
-
-      style="display:none;"
-
-    >
-
-      <div class="card">
-
-        <h1>
-
-          Review Answers
-
-        </h1>
-
-
-        <div id="reviewContainer">
-
-        </div>
-
-
-        <button id="reviewHomeBtn">
-
-          Home
-
-        </button>
-
+      <div class="share-actions" style="margin-bottom: 20px;">
+          <button id="printPdfBtn" class="btn-accent" style="width:100%; margin-bottom:10px; padding:12px; font-size:1rem;"><i class="ri-printer-line"></i> Print / Save Result PDF</button>
+          <div style="display:flex; gap:10px;">
+              <button id="submitWhatsappBtn" class="btn-whatsapp" style="flex:1;"><i class="ri-whatsapp-line"></i> Send to Teacher</button>
+              <button id="submitEmailBtn" class="btn-email" style="flex:1;"><i class="ri-mail-send-line"></i> Email Teacher</button>
+          </div>
       </div>
 
+      <div id="reviewTableContainer" class="table-wrapper" style="border:none;"></div>
+      <button id="homeBtn_review" class="btn-secondary btn-full">Back to Home</button>
     </section>
 
-
-
-  </div>
-
-
-
+  </main>
   <script src="script.js"></script>
-
 </body>
-
 </html>
