@@ -20,7 +20,7 @@
       <div class="logo-area">
         <div class="logo-icon">📘</div>
         <div>
-            <h1>Quiz Master (v16) <br> <a href="https://www.youtube.com/@KALVIKADAL" target="_blank"> KALVI KADAL</a></h1>
+            <h1>Quiz Master (v17 - Cloud) <br> <a href="https://www.youtube.com/@KALVIKADAL" target="_blank"> KALVI KADAL</a></h1>
             <span class="subtitle">Create. Share. Learn.</span>
         </div>
       </div>
@@ -43,7 +43,7 @@
 
     <section id="librarySection" class="panel">
       <div class="section-header">
-        <h3><i class="ri-community-line"></i> Global Quiz Library</h3>
+        <h3><i class="ri-cloud-line"></i> Global Cloud Library</h3>
         <span class="badge-count" id="libCount">Loading...</span>
       </div>
 
@@ -132,7 +132,7 @@
             <input id="csvFileInput" type="file" accept=".csv" hidden />
             <button id="loadCSVBtn" class="btn-secondary"><i class="ri-file-upload-line"></i> Upload CSV</button>
             <button id="createManualBtn" class="btn-secondary"><i class="ri-keyboard-line"></i> Manual</button>
-            <button id="saveToLibraryBtn" class="btn-primary"><i class="ri-save-3-line"></i> Save Quiz</button>
+            <button id="saveToLibraryBtn" class="btn-primary"><i class="ri-cloud-upload-line"></i> Publish to Cloud</button>
             <button id="shareQuizBtn" class="btn-accent"><i class="ri-share-line"></i> Share Link</button>
         </div>
 
@@ -152,7 +152,7 @@
 
         <section id="csvPreview" class="sub-panel hidden">
           <h4>CSV Preview</h4>
-          <button id="saveCsvToLibBtn" class="btn-full btn-primary" style="margin-bottom:10px;">💾 Save Uploaded Quiz</button>
+          <button id="saveCsvToLibBtn" class="btn-full btn-primary" style="margin-bottom:10px;">💾 Publish Uploaded Quiz to Cloud</button>
           <div id="csvTableContainer" class="table-wrapper"></div>
           <button id="startQuizBtn_csv" class="btn-full play-btn">🚀 Test CSV Quiz</button>
         </section>
@@ -236,6 +236,7 @@
     </section>
 
   </main>
-  <script src="script.js"></script>
+  
+  <script type="module" src="script.js"></script>
 </body>
 </html>
