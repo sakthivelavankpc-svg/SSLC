@@ -1,511 +1,804 @@
-// Import Firebase modules directly from the CDN
+// 1. IMPORT FIREBASE MODULES
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
-import { getFirestore, collection, addDoc, getDocs, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+import { 
+    getFirestore, collection, getDocs, addDoc, deleteDoc, doc, updateDoc, getDoc, serverTimestamp 
+} from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
-// ==========================================
-// 🔴 PASTE YOUR FIREBASE CONFIG HERE 🔴
-// ==========================================
-// Import the functions you need from the SDKs you need
-import { initializeApp } from "firebase/app";
-import { getAnalytics } from "firebase/analytics";
-// TODO: Add SDKs for Firebase products that you want to use
-// https://firebase.google.com/docs/web/setup#available-libraries
-
-// Your web app's Firebase configuration
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+// 2. CONFIGURATION
 const firebaseConfig = {
-  apiKey: "AIzaSyAnxIsftWdUxtHEh7nxX1UPRA29c0n1444",
-  authDomain: "quiz-master-3e489.firebaseapp.com",
-  projectId: "quiz-master-3e489",
-  storageBucket: "quiz-master-3e489.firebasestorage.app",
-  messagingSenderId: "741393992507",
-  appId: "1:741393992507:web:b28cd8fcda2b74f85b851e",
-  measurementId: "G-K3W2FKZRN9"
+    apiKey: "AIzaSyAnxIsftWdUxtHEh7nxX1UPRA29c0n1444",
+    authDomain: "quiz-master-3e489.firebaseapp.com",
+    projectId: "quiz-master-3e489",
+    storageBucket: "quiz-master-3e489.firebasestorage.app",
+    messagingSenderId: "741393992507",
+    appId: "1:741393992507:web:b28cd8fcda2b74f85b851e"
 };
 
-// Initialize Firebase
+// 3. INITIALIZATION
 const app = initializeApp(firebaseConfig);
-const analytics = getAnalytics(app);
+const db = getFirestore(app);
 
-
-// DOM Utilities
+// 4. UTILITY & DOM HELPERS
 const $ = (id) => document.getElementById(id);
-const show = (el) => el && el.classList.remove("hidden");
-const hide = (el) => el && el.classList.add("hidden");
-const escapeHtml = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const formatTime = (s) => `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
 
-let allQuizzes = []; 
-let quizData = [], currentQuestion = 0, userAnswers = [], isStudentMode = false;
-let studentDetails = { name: "", place: "" };
-let currentMeta = { creator: "", email: "", exam: "", subject: "" }; 
-let mainTimerInterval, questionTimerInterval, autoAdvanceTimer;
-let totalSeconds = 0, elapsedSeconds = 0, perQuestionRemaining = 0;
-let hasUnsavedChanges = false;
-let editingQuizId = null; // Track if we are editing an existing cloud document
-
-window.addEventListener('load', async () => {
-    checkUrlForSharedQuiz();
-    await loadLibraryFromCloud();
-});
-
-window.onbeforeunload = () => {
-    if (hasUnsavedChanges) return "You have unsaved changes. Save before leaving?";
-};
-
-function showToast(msg, type = 'info') {
-    const container = $("toastContainer");
-    const toast = document.createElement("div");
-    toast.className = "toast";
-    toast.style.borderLeft = type === 'error' ? "4px solid #ef4444" : "4px solid #10b981";
-    toast.textContent = msg;
+function showToast(message, type = 'info') {
+    const container = $('toastContainer');
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.style.backgroundColor = type === 'error' ? 'var(--danger)' : (type === 'success' ? 'var(--success)' : '#333');
+    toast.innerHTML = message;
     container.appendChild(toast);
-    setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 3000);
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
 }
 
-$("themeToggleBtn").addEventListener("click", () => {
-    document.body.classList.toggle("dark-mode");
-    const icon = document.querySelector("#themeToggleBtn i");
-    icon.className = document.body.classList.contains("dark-mode") ? "ri-sun-line" : "ri-moon-line";
+function generateId() {
+    return Math.random().toString(36).substr(2, 9);
+}
+
+function shuffleArray(array) {
+    let arr = [...array];
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+}
+
+// 5. GLOBAL STATE
+let globalQuizzes = [];
+let currentQuizData = null;
+let currentQuestions = [];
+let studentAnswers = {};
+let currentQIndex = 0;
+let mainTimerInterval = null;
+let perQTimerInterval = null;
+let mainSecondsLeft = 0;
+let perQSecondsLeft = 0;
+let studentProfile = { name: '', place: '' };
+let csvParsedQuestions = [];
+
+// 6. INITIALIZATION & ROUTING
+window.addEventListener('load', async () => {
+    initTheme();
+    loadLocalProfiles();
+    attachEventListeners();
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const quizId = urlParams.get('quiz');
+
+    if (quizId) {
+        // Direct link to play a quiz
+        $('librarySection').classList.add('hidden');
+        await fetchAndStartSharedQuiz(quizId);
+    } else {
+        await loadLibraryFromCloud();
+    }
 });
 
-$("toggleCreatorBtn").addEventListener("click", () => { 
-    resetCreatorInputs();
-    show($("creatorPanel")); hide($("librarySection")); $("toggleCreatorBtn").classList.add("hidden"); 
-});
-
-$("closeCreatorBtn").addEventListener("click", () => { 
-    if(hasUnsavedChanges && !confirm("Discard unsaved changes?")) return;
-    hasUnsavedChanges = false;
-    hide($("creatorPanel")); show($("librarySection")); show($("toggleCreatorBtn")); 
-});
-
-// --- CLOUD DATABASE FUNCTIONS ---
-
-async function loadLibraryFromCloud() {
-    $("libCount").textContent = "Loading cloud data...";
-    try {
-        const querySnapshot = await getDocs(collection(db, "quizzes"));
-        const cloudQuizzes = [];
-        querySnapshot.forEach((doc) => {
-            cloudQuizzes.push({ id: doc.id, ...doc.data() });
-        });
-        
-        // Sort by timestamp (newest first) if we save one, otherwise general
-        allQuizzes = cloudQuizzes;
-        renderGrid(allQuizzes);
-        populateFilters();
-    } catch (error) {
-        console.error("Error loading quizzes: ", error);
-        showToast("Failed to load from cloud. Check your database rules.", "error");
-        $("libCount").textContent = "Error loading";
+function initTheme() {
+    if (localStorage.getItem('theme') === 'dark') {
+        document.body.classList.add('dark-mode');
     }
 }
 
-function renderGrid(dataset) {
-    const grid = $("libraryGrid");
-    $("libCount").textContent = `${dataset.length} Quiz${dataset.length !== 1 ? 'zes' : ''}`;
-    grid.innerHTML = "";
+function loadLocalProfiles() {
+    const cName = localStorage.getItem('creatorName');
+    const cEmail = localStorage.getItem('creatorEmail');
+    const tWa = localStorage.getItem('teacherWhatsapp');
+    if (cName) $('creatorName').value = cName;
+    if (cEmail) $('creatorEmail').value = cEmail;
+    if (tWa) $('teacherWhatsapp').value = tWa;
+}
 
-    if (dataset.length === 0) {
-        grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1; text-align:center; padding:40px; color:#888;"><p>No quizzes available in the cloud database.</p></div>`;
+function saveLocalProfiles() {
+    localStorage.setItem('creatorName', $('creatorName').value.trim());
+    localStorage.setItem('creatorEmail', $('creatorEmail').value.trim());
+    localStorage.setItem('teacherWhatsapp', $('teacherWhatsapp').value.trim());
+}
+
+// 7. EVENT LISTENERS SETUP
+function attachEventListeners() {
+    // Top bar actions
+    $('themeToggleBtn').addEventListener('click', () => {
+        document.body.classList.toggle('dark-mode');
+        localStorage.setItem('theme', document.body.classList.contains('dark-mode') ? 'dark' : 'light');
+    });
+
+    $('toggleCreatorBtn').addEventListener('click', () => {
+        $('librarySection').classList.toggle('hidden');
+        $('creatorPanel').classList.toggle('hidden');
+    });
+
+    $('closeCreatorBtn').addEventListener('click', () => {
+        $('creatorPanel').classList.add('hidden');
+        $('librarySection').classList.remove('hidden');
+        loadLibraryFromCloud(); // Refresh
+    });
+
+    // Library Filters
+    $('libSearch').addEventListener('input', renderLibraryGrid);
+    $('filterSubject').addEventListener('change', renderLibraryGrid);
+    $('filterClass').addEventListener('change', renderLibraryGrid);
+
+    // Creator Actions
+    $('createManualBtn').addEventListener('click', () => {
+        $('manualSection').classList.remove('hidden');
+        $('csvPreview').classList.add('hidden');
+        if ($('manualTable').getElementsByTagName('tbody')[0].children.length === 0) {
+            addManualRow();
+        }
+    });
+
+    $('addRowBtn').addEventListener('click', addManualRow);
+    $('startQuizBtn_manual').addEventListener('click', () => testQuizLocally('manual'));
+    $('saveToLibraryBtn').addEventListener('click', () => publishQuizToCloud('manual'));
+
+    // CSV Actions
+    $('loadCSVBtn').addEventListener('click', () => $('csvFileInput').click());
+    $('csvFileInput').addEventListener('change', handleCSVUpload);
+    $('startQuizBtn_csv').addEventListener('click', () => testQuizLocally('csv'));
+    $('saveCsvToLibBtn').addEventListener('click', () => publishQuizToCloud('csv'));
+
+    // Student Modals & Actions
+    $('startStudentQuizBtn').addEventListener('click', beginQuizEngine);
+    
+    // Quiz Engine Navigation
+    $('prevBtn').addEventListener('click', () => navigateQuestion(-1));
+    $('nextBtn').addEventListener('click', () => navigateQuestion(1));
+    $('finishBtn').addEventListener('click', () => confirmFinishQuiz());
+
+    // Review Actions
+    $('printPdfBtn').addEventListener('click', () => window.print());
+    $('homeBtn_review').addEventListener('click', () => window.location.href = window.location.pathname);
+    $('submitWhatsappBtn').addEventListener('click', sendResultViaWhatsApp);
+    $('submitEmailBtn').addEventListener('click', sendResultViaEmail);
+
+    // Share Modal
+    $('closeShareBtn').addEventListener('click', () => $('shareModal').classList.add('hidden'));
+    $('copyLinkBtn').addEventListener('click', () => {
+        $('shareLinkInput').select();
+        document.execCommand('copy');
+        showToast('Link copied to clipboard!', 'success');
+    });
+    $('shareQuizBtn').addEventListener('click', () => {
+        showToast('Please publish to cloud first to get a share link.', 'warning');
+    });
+}
+
+// 8. CLOUD LIBRARY MANAGEMENT
+async function loadLibraryFromCloud() {
+    const libCount = $("libCount");
+    if (!libCount) return;
+    libCount.textContent = "Fetching library...";
+    
+    try {
+        const querySnapshot = await getDocs(collection(db, "quizzes"));
+        globalQuizzes = [];
+        let subjects = new Set();
+        let classes = new Set();
+
+        querySnapshot.forEach((doc) => {
+            const data = doc.data();
+            globalQuizzes.push({ id: doc.id, ...data });
+            if (data.metaSubject) subjects.add(data.metaSubject);
+            if (data.metaClass) classes.add(data.metaClass);
+        });
+
+        // Populate filters
+        populateDropdown('filterSubject', subjects, 'All Subjects');
+        populateDropdown('filterClass', classes, 'All Classes');
+
+        libCount.textContent = `${globalQuizzes.length} Quizzes Available`;
+        renderLibraryGrid();
+        
+    } catch (error) {
+        console.error("Database Error:", error);
+        showToast("Error loading cloud library", "error");
+        libCount.textContent = "Error loading";
+    }
+}
+
+function populateDropdown(id, itemsSet, defaultText) {
+    const select = $(id);
+    select.innerHTML = `<option value="all">${defaultText}</option>`;
+    Array.from(itemsSet).sort().forEach(item => {
+        const opt = document.createElement('option');
+        opt.value = item;
+        opt.textContent = item;
+        select.appendChild(opt);
+    });
+}
+
+function renderLibraryGrid() {
+    const grid = $('libraryGrid');
+    const searchTerm = $('libSearch').value.toLowerCase();
+    const filterSub = $('filterSubject').value;
+    const filterCls = $('filterClass').value;
+
+    grid.innerHTML = '';
+
+    const filtered = globalQuizzes.filter(q => {
+        const matchesSearch = (q.metaExam || '').toLowerCase().includes(searchTerm) || 
+                              (q.metaTopic || '').toLowerCase().includes(searchTerm) ||
+                              (q.creatorName || '').toLowerCase().includes(searchTerm);
+        const matchesSub = filterSub === 'all' || q.metaSubject === filterSub;
+        const matchesCls = filterCls === 'all' || q.metaClass === filterCls;
+        return matchesSearch && matchesSub && matchesCls;
+    }).sort((a, b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0)); // Newest first
+
+    if (filtered.length === 0) {
+        grid.innerHTML = '<div style="grid-column: 1/-1; text-align:center; padding: 20px; color: var(--text-light);">No quizzes found matching filters.</div>';
         return;
     }
 
-    dataset.forEach((quiz, index) => {
-        const card = document.createElement("div");
-        card.className = "quiz-card";
-        
+    filtered.forEach(quiz => {
+        const card = document.createElement('div');
+        card.className = 'quiz-card';
         card.innerHTML = `
-          <div>
-            <span class="card-badge" style="background:var(--primary)">🌍 CLOUD</span>
-            <span class="card-badge" style="background:#eee; color:#333; margin-left:5px;">${escapeHtml(quiz.meta.class)}</span>
-          </div>
-          <h4 class="card-title" style="margin:5px 0;">${escapeHtml(quiz.meta.exam)}</h4>
-          <div class="card-sub">${escapeHtml(quiz.meta.subject)} • ${escapeHtml(quiz.meta.topic)}</div>
-          <div class="card-sub" style="font-size:0.8rem; color:var(--text-light);">👤 ${escapeHtml(quiz.meta.creator || "Admin")}</div>
-          <div class="card-sub" style="font-size:0.8rem">❓ ${quiz.questions.length} Questions</div>
-          <div class="card-actions" style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:5px; margin-top:10px;">
-              <button class="btn-sm btn-primary play-lib-btn">Play</button>
-              <button class="btn-sm btn-secondary edit-lib-btn" style="color:#f59e0b"><i class="ri-edit-line"></i></button>
-              <button class="btn-sm btn-secondary del-lib-btn" style="color:var(--danger)"><i class="ri-delete-bin-line"></i></button>
-          </div>`;
-        
-        card.querySelector(".play-lib-btn").onclick = () => {
-           applyConfig(quiz.config || {});
-           currentMeta = quiz.meta || {};
-           initQuiz(quiz.questions);
-        };
-
-        card.querySelector(".edit-lib-btn").onclick = () => editQuizFromCloud(quiz);
-        card.querySelector(".del-lib-btn").onclick = () => deleteFromCloud(quiz);
-        
+            <div style="display:flex; justify-content:space-between;">
+                <span class="card-badge" style="background:var(--primary)">${quiz.metaClass || 'N/A'} - ${quiz.metaSubject || 'N/A'}</span>
+                <span class="card-badge" style="background:var(--accent)">${quiz.questions?.length || 0} Qs</span>
+            </div>
+            <h4 class="card-title">${quiz.metaExam || 'Untitled Exam'}</h4>
+            <div class="card-sub">Topic: ${quiz.metaTopic || 'N/A'}</div>
+            <div class="card-sub">By: ${quiz.creatorName || 'Unknown'}</div>
+            <div style="display:flex; gap:5px; margin-top:10px;">
+                <button class="btn-sm btn-primary" onclick="window.playQuiz('${quiz.id}')"><i class="ri-play-fill"></i> Play</button>
+                <button class="btn-sm btn-secondary" onclick="window.shareExistingQuiz('${quiz.id}')"><i class="ri-share-line"></i></button>
+                <button class="btn-sm btn-secondary" onclick="window.deleteQuiz('${quiz.id}', '${quiz.creatorPassword}')" style="color:var(--danger);"><i class="ri-delete-bin-line"></i></button>
+            </div>
+        `;
         grid.appendChild(card);
     });
 }
 
-function populateFilters() {
-    const subjects = [...new Set(allQuizzes.map(q => q.meta.subject))].sort();
-    const classes = [...new Set(allQuizzes.map(q => q.meta.class))].sort();
-    const subSel = $("filterSubject");
-    subSel.innerHTML = '<option value="all">All Subjects</option>';
-    subjects.forEach(s => { if(s) { const o = document.createElement("option"); o.value = s; o.textContent = s; subSel.appendChild(o); }});
-    const clsSel = $("filterClass");
-    clsSel.innerHTML = '<option value="all">All Classes</option>';
-    classes.forEach(c => { if(c) { const o = document.createElement("option"); o.value = c; o.textContent = c; clsSel.appendChild(o); }});
-}
-
-function filterLibrary() {
-    const term = $("libSearch").value.toLowerCase();
-    const sub = $("filterSubject").value;
-    const cls = $("filterClass").value;
-
-    const filtered = allQuizzes.filter(q => {
-        const m = q.meta;
-        const matchText = (m.exam+m.subject+m.topic+m.creator).toLowerCase().includes(term);
-        const matchSub = sub === "all" || m.subject === sub;
-        const matchCls = cls === "all" || m.class === cls;
-        return matchText && matchSub && matchCls;
-    });
-    renderGrid(filtered);
-}
-
-$("libSearch").addEventListener("input", filterLibrary);
-$("filterSubject").addEventListener("change", filterLibrary);
-$("filterClass").addEventListener("change", filterLibrary);
-
-function parseCSV(csvText) {
-    const lines = csvText.split(/\r?\n/).filter(l => l.trim());
-    if (lines.length < 2) return [];
-    return lines.slice(1).map(line => {
-      const cols = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.replace(/^"|"$/g, '').trim()); 
-      return { question: cols[0]||"", A: cols[1]||"", B: cols[2]||"", C: cols[3]||"", D: cols[4]||"", answer: cols[5]||"" };
-    });
-}
-
-function getMetaFromInputs() {
-    return {
-        creator: $("creatorName").value.trim(),
-        password: $("creatorPassword").value.trim(),
-        email: $("creatorEmail").value.trim(),
-        exam: $("metaExam").value.trim(),
-        subject: $("metaSubject").value.trim(),
-        class: $("metaClass").value,
-        topic: $("metaTopic").value
-    };
-}
-
-async function saveQuizLogic() {
-    const data = getCurrentData();
-    if (!data.length) return showToast("Add questions first!", "error");
-    
-    const meta = getMetaFromInputs();
-    if (!meta.exam) return showToast("Exam Name required.", "error");
-    if (!meta.password) return showToast("Password required.", "error");
-
-    const newQuizData = { 
-        meta: meta, 
-        config: getConfig(), 
-        questions: data,
-        createdAt: Date.now()
-    };
-    
-    try {
-        showToast("Publishing to cloud... please wait.", "info");
-        
-        if (editingQuizId) {
-            // Update existing cloud doc
-            await updateDoc(doc(db, "quizzes", editingQuizId), newQuizData);
-            showToast("Quiz updated in cloud successfully!");
-        } else {
-            // Create new cloud doc
-            await addDoc(collection(db, "quizzes"), newQuizData);
-            showToast("Quiz published to cloud successfully!");
-        }
-        
-        hasUnsavedChanges = false;
-        editingQuizId = null;
-        $("closeCreatorBtn").click();
-        await loadLibraryFromCloud();
-        
-    } catch (error) {
-        console.error("Error saving: ", error);
-        showToast("Error saving to cloud.", "error");
-    }
-}
-
-$("saveToLibraryBtn").onclick = saveQuizLogic;
-if ($("saveCsvToLibBtn")) {
-    $("saveCsvToLibBtn").onclick = saveQuizLogic;
-}
-
-const downloadBtn = document.createElement("button");
-downloadBtn.className = "btn-accent";
-downloadBtn.innerHTML = "<i class='ri-download-line'></i> Download CSV";
-downloadBtn.onclick = downloadCurrentAsCSV;
-$("saveToLibraryBtn").parentNode.insertBefore(downloadBtn, $("shareQuizBtn")); 
-
-function downloadCurrentAsCSV() {
-    const data = getCurrentData();
-    if(!data.length) return showToast("No questions to extract.", "error");
-    let csv = "Question,A,B,C,D,Answer\n";
-    data.forEach(row => { csv += [row.question,row.A,row.B,row.C,row.D,row.answer].map(f=>`"${String(f).replace(/"/g,'""')}"`).join(",") + "\n"; });
-    const link = document.createElement("a"); link.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv); link.download = ($("metaExam").value||"quiz")+".csv";
-    document.body.appendChild(link); link.click(); document.body.removeChild(link);
-}
-
-async function deleteFromCloud(quiz) {
-    if(quiz.meta.password) {
-        if(prompt(`Enter password to delete "${quiz.meta.exam}":`) !== quiz.meta.password) return showToast("Invalid Password!", "error");
-    }
-    
-    try {
-        await deleteDoc(doc(db, "quizzes", quiz.id));
-        showToast("Deleted from cloud.");
-        loadLibraryFromCloud();
-    } catch (e) {
-        showToast("Error deleting from cloud.", "error");
-        console.error(e);
-    }
-}
-
-function editQuizFromCloud(quiz) {
-    if(quiz.meta.password) {
-        if(prompt(`Enter password to edit "${quiz.meta.exam}":`) !== quiz.meta.password) return showToast("Invalid Password!", "error");
-    }
-    
-    editingQuizId = quiz.id; // Mark that we are editing an existing cloud document
-    
-    $("creatorName").value = quiz.meta.creator||""; $("creatorPassword").value = quiz.meta.password||""; $("creatorEmail").value = quiz.meta.email||"";
-    $("metaExam").value = quiz.meta.exam||""; $("metaSubject").value = quiz.meta.subject||""; $("metaClass").value = quiz.meta.class||""; $("metaTopic").value = quiz.meta.topic||"";
-    applyConfig(quiz.config);
-
-    const tbody = document.querySelector("#manualTable tbody"); tbody.innerHTML = "";
-    quiz.questions.forEach((q, i) => {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `<td>${i+1}</td><td contenteditable>${q.question}</td><td contenteditable>${q.A}</td><td contenteditable>${q.B}</td><td contenteditable>${q.C}</td><td contenteditable>${q.D}</td><td contenteditable>${q.answer}</td><td><button style="color:red" onclick="this.closest('tr').remove()">×</button></td>`;
-        tbody.appendChild(tr);
-    });
-    hasUnsavedChanges = true;
-    show($("creatorPanel")); hide($("librarySection")); $("toggleCreatorBtn").classList.add("hidden"); show($("manualSection")); hide($("csvPreview"));
-}
-
-function resetCreatorInputs() {
-    editingQuizId = null;
-    document.querySelectorAll("#creatorPanel input").forEach(i => { if(i.id !== "totalMarks" && i.id !== "minPassMarks") i.value = ""; });
-    document.querySelector("#manualTable tbody").innerHTML = "";
-    $("totalMarks").value = "100"; $("minPassMarks").value = "40";
-    hasUnsavedChanges = false;
-}
-
-document.querySelector("#manualTable").addEventListener("input", () => hasUnsavedChanges = true);
-
-function getCurrentData() {
-    if (!$("manualSection").classList.contains("hidden")) {
-        return [...document.querySelectorAll("#manualTable tbody tr")].map(tr => {
-            const c = tr.querySelectorAll("td");
-            return { question: c[1].innerHTML, A: c[2].innerHTML, B: c[3].innerHTML, C: c[4].innerHTML, D: c[5].innerHTML, answer: c[6].innerHTML };
-        }).filter(q => q.question.trim());
-    } else if ($("csvPreview")._rows) return $("csvPreview")._rows;
-    return [];
-}
-function getConfig() { return { time: $("totalMinutes").value, perQ: $("perQuestionSeconds").value, marks: $("totalMarks").value || 100, pass: $("minPassMarks").value, shuffle: $("shuffleQuestions").checked, contact: $("teacherWhatsapp").value }; }
-function applyConfig(cfg) { $("totalMinutes").value = cfg.time||""; $("perQuestionSeconds").value = cfg.perQ||""; $("totalMarks").value = cfg.marks||100; $("minPassMarks").value = cfg.pass||40; $("shuffleQuestions").checked = cfg.shuffle||false; $("teacherWhatsapp").value = cfg.contact||""; }
-
-$("loadCSVBtn").addEventListener("click", () => $("csvFileInput").click());
-$("csvFileInput").addEventListener("change", (e) => {
-  const file = e.target.files[0]; if (!file) return;
-  const reader = new FileReader();
-  reader.onload = (ev) => {
-    const rows = parseCSV(ev.target.result); $("csvPreview")._rows = rows;
-    $("csvTableContainer").innerHTML = `<table><thead><tr><th>#</th><th>Question Text</th><th>A</th><th>B</th><th>C</th><th>D</th><th>Correct Choice</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td>${i+1}</td><td>${r.question}</td><td>${r.A}</td><td>${r.B}</td><td>${r.C}</td><td>${r.D}</td><td style="font-weight:bold;color:green">${r.answer}</td></tr>`).join('')}</tbody></table>`;
-    show($("csvPreview")); hide($("manualSection")); hasUnsavedChanges = true;
-  }; reader.readAsText(file);
-});
-
-$("createManualBtn").addEventListener("click", () => { show($("manualSection")); hide($("csvPreview")); });
-$("addRowBtn").addEventListener("click", () => {
-    const tbody = document.querySelector("#manualTable tbody"); const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${tbody.children.length+1}</td><td contenteditable></td><td contenteditable></td><td contenteditable></td><td contenteditable></td><td contenteditable></td><td contenteditable></td><td><button style="color:red" onclick="this.closest('tr').remove()">×</button></td>`;
-    tbody.appendChild(tr); hasUnsavedChanges = true;
-});
-
-$("startQuizBtn_manual").addEventListener("click", () => initQuiz(getCurrentData()));
-$("startQuizBtn_csv").addEventListener("click", () => initQuiz(getCurrentData()));
-
-function initQuiz(data) {
-    if (!data || !data.length) return showToast("No quiz parameters found!", "error");
-    if (!isStudentMode && !currentMeta.creator) { currentMeta = getMetaFromInputs(); }
-    if (!isStudentMode && !studentDetails.name) { show($("studentLoginModal")); window.tempQuizData = data; return; }
-    runQuiz(data);
-}
-
-$("startStudentQuizBtn").addEventListener("click", () => {
-    const name = $("studentName").value.trim(); const place = $("studentPlace").value.trim();
-    if(!name) return showToast("Please enter your name.", "error");
-    studentDetails = { name, place };
-    hide($("studentLoginModal")); $("dispName").textContent = name; $("dispPlace").textContent = place || "Unassigned Class"; show($("studentInfoDisplay"));
-    if (window.tempQuizData) runQuiz(window.tempQuizData);
-});
-
-function runQuiz(data) {
-    if ($("shuffleQuestions").checked) data.sort(() => Math.random() - 0.5);
-    quizData = data; currentQuestion = 0; userAnswers = Array(data.length).fill(null);
-    hide($("librarySection")); hide($("creatorPanel")); hide(document.querySelector(".app-header")); show($("quizSection"));
-    const mins = parseFloat($("totalMinutes").value) || 0; totalSeconds = mins * 60; elapsedSeconds = 0; startMainTimer(); renderQuestion();
-}
-
-function renderQuestion() {
-    if(autoAdvanceTimer) clearTimeout(autoAdvanceTimer); if(questionTimerInterval) clearInterval(questionTimerInterval);
-    const q = quizData[currentQuestion]; 
-    
-    $("questionBox").innerHTML = q.question;
-    
-    $("optionsBox").innerHTML = ["A","B","C","D"].map(k => {
-        return `<button class="opt-btn" onclick="handleOpt(this, '${k}')"><span style="background:var(--secondary);padding:4px 10px;border-radius:6px;font-weight:bold;">${k}</span> ${q[k]}</button>`;
-    }).join("");
-    
-    const pct = ((currentQuestion+1)/quizData.length)*100; $("progressBarFill").style.width = `${pct}%`; $("questionProgressLabel").textContent = `Question ${currentQuestion+1} / ${quizData.length}`;
-    const perQ = parseFloat($("perQuestionSeconds").value) || 0; if (perQ>0) runPerQTimer(perQ);
-}
-
-// Make sure handleOpt is attached to window since we are in a module now
-window.handleOpt = (btn, optionKey) => {
-    document.querySelectorAll(".opt-btn").forEach(b=>b.disabled=true); 
-    userAnswers[currentQuestion] = optionKey;
-    
-    const correctKey = quizData[currentQuestion].answer.trim(); 
-    btn.classList.add(optionKey === correctKey ? "correct" : "wrong");
-    
-    if(optionKey !== correctKey) {
-        document.querySelectorAll(".opt-btn").forEach(b => {
-            if(b.getAttribute('onclick').includes(`'${correctKey}'`)) b.classList.add("correct");
-        });
-    }
-    
-    const correctCount = userAnswers.reduce((acc, ans, i) => acc + (ans === (quizData[i].answer||"").trim() ? 1 : 0), 0);
-    const totalM = parseFloat($("totalMarks").value) || 100; 
-    $("liveScore").textContent = `Score: ${Math.round(correctCount * (totalM / quizData.length))}`;
-    
-    autoAdvanceTimer = setTimeout(() => { 
-        if(currentQuestion < quizData.length-1) { 
-            currentQuestion++; 
-            renderQuestion(); 
-        } else {
-            finishQuiz(); 
-        }
-    }, 1500);
+// Global exposure for dynamically created buttons
+window.playQuiz = async (quizId) => {
+    $('librarySection').classList.add('hidden');
+    await fetchAndStartSharedQuiz(quizId);
 };
 
-$("prevBtn").addEventListener("click",()=>{if(currentQuestion>0){currentQuestion--;renderQuestion();}});
-$("nextBtn").addEventListener("click",()=>{if(currentQuestion<quizData.length-1){currentQuestion++;renderQuestion();}});
-$("finishBtn").addEventListener("click", finishQuiz);
+window.shareExistingQuiz = (quizId) => {
+    const link = `${window.location.origin}${window.location.pathname}?quiz=${quizId}`;
+    $('shareLinkInput').value = link;
+    $('shareModal').classList.remove('hidden');
+};
 
-function startMainTimer() { if(mainTimerInterval) clearInterval(mainTimerInterval); mainTimerInterval = setInterval(() => { if(totalSeconds > 0) { totalSeconds--; $("mainTimerLabel").textContent = formatTime(totalSeconds); if(totalSeconds<=0) finishQuiz(); } else { elapsedSeconds++; $("mainTimerLabel").textContent = formatTime(elapsedSeconds); } }, 1000); }
-function runPerQTimer(sec) { perQuestionRemaining = sec; show($("timerPerQ")); $("timerPerQ").textContent = sec; questionTimerInterval = setInterval(() => { perQuestionRemaining--; $("timerPerQ").textContent = perQuestionRemaining; if(perQuestionRemaining<=0) { clearInterval(questionTimerInterval); if(currentQuestion<quizData.length-1) { currentQuestion++; renderQuestion(); } else finishQuiz(); } }, 1000); }
-
-function finishQuiz() {
-    clearInterval(mainTimerInterval); clearInterval(questionTimerInterval); clearTimeout(autoAdvanceTimer);
-    hide($("quizSection")); show($("reviewSection")); show(document.querySelector(".app-header"));
+window.deleteQuiz = async (quizId, correctPwd) => {
+    const pwd = prompt("Enter the Creator Password to delete this quiz:");
+    if (!pwd) return;
+    if (pwd !== correctPwd) {
+        showToast("Incorrect password!", "error");
+        return;
+    }
     
-    let score = 0, correct = 0, skipped = 0; 
-    const totalM = parseFloat($("totalMarks").value) || 100; 
-    const markPerQ = totalM / quizData.length;
-    let listHtml = '';
-    
-    quizData.forEach((q, i) => {
-        const uKey = (userAnswers[i] || "").trim();
-        const cKey = (q.answer || "").trim();
-        
-        let userClass = "wrong-ans";
-        let userText = q[uKey] || "---";
-        
-        if(!uKey) { 
-            skipped++; 
-            userClass = "skipped-ans"; 
-            userText = "No Answer Given"; 
-        } else if(uKey === cKey) { 
-            score += markPerQ; 
-            correct++; 
-            userClass = "correct-ans"; 
+    if (confirm("Are you sure you want to permanently delete this quiz?")) {
+        try {
+            await deleteDoc(doc(db, "quizzes", quizId));
+            showToast("Quiz deleted successfully.", "success");
+            loadLibraryFromCloud();
+        } catch (e) {
+            showToast("Error deleting quiz.", "error");
         }
-        
-        listHtml += `
-          <div class="review-card">
-              <div class="review-q-row">
-                  <span class="q-num">Q${i+1}.</span>
-                  <span class="q-text">${q.question}</span>
-              </div>
-              <div class="review-ans-row">
-                  <div class="ans-box ${userClass}">
-                      <span class="ans-label"><i class="ri-user-line"></i> Response [${uKey || 'None'}]:</span>
-                      <span class="ans-val">${userText}</span>
-                  </div>
-                  <div class="ans-box correct-ans">
-                      <span class="ans-label"><i class="ri-check-double-line"></i> Correct [${cKey}]:</span>
-                      <span class="ans-val">${q[cKey]}</span>
-                  </div>
-              </div>
-          </div>`;
-    });
-    
-    const finalScore = Math.round(score);
-    const summaryHtml = `
-      <div class="report-header">
-          <h2 style="margin:0 0 10px 0; color:var(--primary); border-bottom:2px solid var(--border); padding-bottom:10px;">🎓 QUIZ RESPONSE REPORT</h2>
-          <div class="report-meta-grid">
-              <div><strong>Student:</strong> ${escapeHtml(studentDetails.name)}</div>
-              <div><strong>Location/Class:</strong> ${escapeHtml(studentDetails.place)}</div>
-              <div><strong>Exam:</strong> ${escapeHtml(currentMeta.exam || "Quiz")}</div>
-              <div><strong>Subject:</strong> ${escapeHtml(currentMeta.subject || "General")}</div>
-              <div><strong>Teacher Name:</strong> ${escapeHtml(currentMeta.creator || "Instructor")}</div>
-              <div><strong>Teacher Email:</strong> ${escapeHtml(currentMeta.email || "N/A")}</div>
-          </div>
-          <div class="report-score-box">
-              <div class="score-item"><span class="score-lbl">Total Marks</span><span class="score-val">${finalScore} / ${totalM}</span></div>
-              <div class="score-item" style="color:var(--success)"><span class="score-lbl">Correct</span><span class="score-val">${correct}</span></div>
-              <div class="score-item" style="color:var(--danger)"><span class="score-lbl">Incorrect</span><span class="score-val">${quizData.length - correct - skipped}</span></div>
-          </div>
-      </div>`;
-      
-    $("finalScoreDisplay").textContent = finalScore; 
-    $("reviewTableContainer").innerHTML = summaryHtml + `<div class="review-list-container">${listHtml}</div>`;
-    
-    const pass = parseFloat($("minPassMarks").value)||0; 
-    $("passFailText").innerHTML = finalScore >= pass ? "<span style='color:var(--success)'>PASSED</span>" : "<span style='color:var(--danger)'>FAILED</span>";
-    
-    const msgString = `*Quiz Performance Report*\nStudent: ${studentDetails.name}\nExam: ${currentMeta.exam}\nSubject: ${currentMeta.subject}\nScore: ${finalScore}/${totalM}`;
-    const contact = $("teacherWhatsapp").value;
-    
-    $("submitWhatsappBtn").onclick = () => { window.open(contact ? `https://wa.me/${contact}?text=${encodeURIComponent(msgString)}` : `https://wa.me/?text=${encodeURIComponent(msgString)}`, "_blank"); };
-    $("submitEmailBtn").onclick = () => window.open(`mailto:${currentMeta.email || ""}?subject=Quiz Result: ${studentDetails.name}&body=${encodeURIComponent(msgString)}`, "_self");
+    }
+};
+
+// 9. CREATOR STUDIO & DATA GATHERING
+function getMetadata() {
+    return {
+        creatorName: $('creatorName').value.trim(),
+        creatorPassword: $('creatorPassword').value.trim(),
+        creatorEmail: $('creatorEmail').value.trim(),
+        metaExam: $('metaExam').value.trim(),
+        metaSubject: $('metaSubject').value.trim(),
+        metaClass: $('metaClass').value.trim(),
+        metaTopic: $('metaTopic').value.trim(),
+        totalMinutes: Number($('totalMinutes').value) || 0,
+        totalMarks: Number($('totalMarks').value) || 100,
+        perQuestionSeconds: Number($('perQuestionSeconds').value) || 0,
+        minPassMarks: Number($('minPassMarks').value) || 40,
+        shuffleQuestions: $('shuffleQuestions').checked,
+        teacherWhatsapp: $('teacherWhatsapp').value.trim()
+    };
 }
 
-$("printPdfBtn").addEventListener("click", () => window.print()); 
-$("homeBtn_review").addEventListener("click", () => location.reload());
+function validateMetadata(meta) {
+    if (!meta.creatorName || !meta.creatorPassword || !meta.metaExam) {
+        showToast("Creator Name, Password, and Exam Name are required.", "error");
+        return false;
+    }
+    return true;
+}
 
-function checkUrlForSharedQuiz() {
-    const hash = location.hash; if (hash && hash.includes("quiz=")) {
-        try { 
-            const str = LZString.decompressFromEncodedURIComponent(hash.split("quiz=")[1]); 
-            const data = JSON.parse(str); 
-            isStudentMode = true; 
-            applyConfig(data.config); 
-            if(data.meta) currentMeta = data.meta; 
-            hide($("librarySection")); hide($("toggleCreatorBtn")); hide($("creatorPanel")); 
-            window.tempQuizData = data.questions; 
-            show($("studentLoginModal")); 
-        } catch(e) { 
-            showToast("Error processing shared reference key", "error"); 
+// 10. MANUAL EDITOR
+function addManualRow() {
+    const tbody = $('manualTable').getElementsByTagName('tbody')[0];
+    const rowCount = tbody.children.length + 1;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+        <td>${rowCount}</td>
+        <td><input type="text" class="q-val" placeholder="Question HTML allowed"></td>
+        <td><input type="text" class="opt-a" placeholder="Opt A"></td>
+        <td><input type="text" class="opt-b" placeholder="Opt B"></td>
+        <td><input type="text" class="opt-c" placeholder="Opt C"></td>
+        <td><input type="text" class="opt-d" placeholder="Opt D"></td>
+        <td><input type="text" class="ans-val" placeholder="Exact Ans Text"></td>
+        <td><button class="btn-icon" style="color:var(--danger);" onclick="this.closest('tr').remove()"><i class="ri-close-line"></i></button></td>
+    `;
+    tbody.appendChild(tr);
+}
+
+function extractManualQuestions() {
+    const rows = $('manualTable').getElementsByTagName('tbody')[0].children;
+    let questions = [];
+    for (let i = 0; i < rows.length; i++) {
+        const q = rows[i].querySelector('.q-val').value.trim();
+        const a = rows[i].querySelector('.opt-a').value.trim();
+        const b = rows[i].querySelector('.opt-b').value.trim();
+        const c = rows[i].querySelector('.opt-c').value.trim();
+        const d = rows[i].querySelector('.opt-d').value.trim();
+        const ans = rows[i].querySelector('.ans-val').value.trim();
+
+        if (q && ans) {
+            questions.push({
+                text: q,
+                options: [a, b, c, d].filter(Boolean),
+                answer: ans
+            });
         }
+    }
+    return questions;
+}
+
+// 11. CSV PARSER
+function handleCSVUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(evt) {
+        const text = evt.target.result;
+        parseAndPreviewCSV(text);
+    };
+    reader.readAsText(file, 'UTF-8');
+}
+
+function parseAndPreviewCSV(csvText) {
+    // Basic CSV parser handling quotes
+    const rows = [];
+    let currentRow = [];
+    let currentCell = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < csvText.length; i++) {
+        const char = csvText[i];
+        if (inQuotes) {
+            if (char === '"') {
+                if (csvText[i + 1] === '"') { currentCell += '"'; i++; } // Escaped quote
+                else { inQuotes = false; }
+            } else { currentCell += char; }
+        } else {
+            if (char === '"') { inQuotes = true; }
+            else if (char === ',') { currentRow.push(currentCell.trim()); currentCell = ''; }
+            else if (char === '\n' || char === '\r') {
+                currentRow.push(currentCell.trim());
+                if (currentRow.some(c => c)) rows.push(currentRow); // Skip entirely empty rows
+                currentRow = []; currentCell = '';
+                if (char === '\r' && csvText[i + 1] === '\n') i++; // Skip Windows CRLF
+            } else { currentCell += char; }
+        }
+    }
+    if (currentCell || currentRow.length > 0) {
+        currentRow.push(currentCell.trim());
+        rows.push(currentRow);
+    }
+
+    // Process rows to Questions
+    csvParsedQuestions = [];
+    let htmlPreview = `<table><thead><tr><th>#</th><th>Question</th><th>Options</th><th>Answer</th></tr></thead><tbody>`;
+    
+    // Assume Header row exists if first row contains "Question"
+    let startIndex = rows[0].join('').toLowerCase().includes('question') ? 1 : 0;
+
+    for (let i = startIndex; i < rows.length; i++) {
+        const r = rows[i];
+        if (r.length < 3) continue; // Need at least Q, 1 Opt, Ans
+        
+        const qText = r[0];
+        const ansText = r[r.length - 1]; // Assume last column is exact answer
+        const options = r.slice(1, r.length - 1).filter(Boolean);
+
+        if (qText && ansText) {
+            csvParsedQuestions.push({ text: qText, options: options, answer: ansText });
+            htmlPreview += `<tr>
+                <td>${csvParsedQuestions.length}</td>
+                <td>${qText}</td>
+                <td>${options.join(' | ')}</td>
+                <td><b>${ansText}</b></td>
+            </tr>`;
+        }
+    }
+    htmlPreview += `</tbody></table>`;
+    
+    if (csvParsedQuestions.length > 0) {
+        $('csvTableContainer').innerHTML = htmlPreview;
+        $('manualSection').classList.add('hidden');
+        $('csvPreview').classList.remove('hidden');
+        showToast(`Successfully parsed ${csvParsedQuestions.length} questions.`, 'success');
+    } else {
+        showToast(`Failed to parse CSV. Ensure columns: Question, OptA, OptB..., Answer`, 'error');
     }
 }
 
-$("shareQuizBtn").addEventListener("click", () => { 
-    const qData = getCurrentData(); if(!qData.length) return showToast("No valid structural data to share.", "error"); 
-    const str = LZString.compressToEncodedURIComponent(JSON.stringify({ questions: qData, config: getConfig(), meta: getMetaFromInputs() })); 
-    $("shareLinkInput").value = `${location.origin}${location.pathname}#quiz=${str}`; 
-    show($("shareModal")); 
-});
-$("copyLinkBtn").addEventListener("click", () => { $("shareLinkInput").select(); document.execCommand("copy"); showToast("URL Copied!"); });
-$("closeShareBtn").addEventListener("click", () => hide($("shareModal")));
+// 12. PUBLISH & TEST MECHANICS
+async function publishQuizToCloud(source) {
+    const meta = getMetadata();
+    if (!validateMetadata(meta)) return;
+
+    let questions = source === 'manual' ? extractManualQuestions() : csvParsedQuestions;
+    if (questions.length === 0) {
+        showToast("No valid questions found to publish.", "error");
+        return;
+    }
+
+    saveLocalProfiles();
+    const btn = source === 'manual' ? $('saveToLibraryBtn') : $('saveCsvToLibBtn');
+    const origText = btn.innerHTML;
+    btn.innerHTML = "Publishing...";
+    btn.disabled = true;
+
+    const quizPayload = {
+        ...meta,
+        questions: questions,
+        createdAt: serverTimestamp()
+    };
+
+    try {
+        const docRef = await addDoc(collection(db, "quizzes"), quizPayload);
+        showToast("Quiz Published to Cloud!", "success");
+        $('creatorPanel').classList.add('hidden');
+        $('librarySection').classList.remove('hidden');
+        
+        // Setup Share Link directly
+        window.shareExistingQuiz(docRef.id);
+        loadLibraryFromCloud();
+    } catch (e) {
+        console.error(e);
+        showToast("Error publishing quiz", "error");
+    } finally {
+        btn.innerHTML = origText;
+        btn.disabled = false;
+    }
+}
+
+function testQuizLocally(source) {
+    const meta = getMetadata();
+    let questions = source === 'manual' ? extractManualQuestions() : csvParsedQuestions;
+    
+    if (questions.length === 0) {
+        showToast("Add questions to test.", "error");
+        return;
+    }
+
+    currentQuizData = { ...meta, questions: questions };
+    $('creatorPanel').classList.add('hidden');
+    
+    // Automatically fill test info
+    $('studentName').value = "Creator Test";
+    $('studentPlace').value = "Studio";
+    $('studentLoginModal').classList.remove('hidden');
+}
+
+
+// 13. QUIZ ENGINE - FETCH & LOGIN
+async function fetchAndStartSharedQuiz(quizId) {
+    try {
+        const docRef = doc(db, "quizzes", quizId);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+            currentQuizData = docSnap.data();
+            currentQuizData.id = docSnap.id;
+            $('studentLoginModal').classList.remove('hidden');
+        } else {
+            showToast("Quiz not found or deleted.", "error");
+            $('librarySection').classList.remove('hidden');
+        }
+    } catch (error) {
+        showToast("Error fetching quiz link.", "error");
+    }
+}
+
+function beginQuizEngine() {
+    const sName = $('studentName').value.trim();
+    const sPlace = $('studentPlace').value.trim();
+    
+    if (!sName) {
+        showToast("Please enter your name.", "warning");
+        return;
+    }
+
+    studentProfile = { name: sName, place: sPlace || 'Unknown' };
+    $('dispName').textContent = sName;
+    $('dispPlace').textContent = studentProfile.place;
+    $('studentInfoDisplay').classList.remove('hidden');
+
+    $('studentLoginModal').classList.add('hidden');
+    $('librarySection').classList.add('hidden');
+    $('appContainer').style.paddingBottom = "0"; // remove container padding for full screen quiz
+
+    startQuizEnvironment();
+}
+
+// 14. QUIZ ENVIRONMENT & LOGIC
+function startQuizEnvironment() {
+    $('quizSection').classList.remove('hidden');
+    
+    // Prepare Questions
+    currentQuestions = JSON.parse(JSON.stringify(currentQuizData.questions)); // Deep copy
+    if (currentQuizData.shuffleQuestions) {
+        currentQuestions = shuffleArray(currentQuestions);
+    }
+    
+    studentAnswers = {}; // Reset answers
+    currentQIndex = 0;
+
+    // Start Main Timer
+    if (currentQuizData.totalMinutes > 0) {
+        mainSecondsLeft = currentQuizData.totalMinutes * 60;
+        updateTimerDisplay('mainTimerLabel', mainSecondsLeft);
+        mainTimerInterval = setInterval(() => {
+            mainSecondsLeft--;
+            updateTimerDisplay('mainTimerLabel', mainSecondsLeft);
+            if (mainSecondsLeft <= 0) autoSubmitQuiz();
+        }, 1000);
+    } else {
+        $('mainTimerLabel').textContent = "Unlimited Time";
+    }
+
+    renderCurrentQuestion();
+}
+
+function renderCurrentQuestion() {
+    if (currentQIndex < 0) currentQIndex = 0;
+    if (currentQIndex >= currentQuestions.length) currentQIndex = currentQuestions.length - 1;
+
+    const qData = currentQuestions[currentQIndex];
+    
+    // UI Progress
+    $('questionProgressLabel').textContent = `Q ${currentQIndex + 1}/${currentQuestions.length}`;
+    const percent = ((currentQIndex + 1) / currentQuestions.length) * 100;
+    $('progressBarFill').style.width = `${percent}%`;
+    calculateLiveScore();
+
+    // Render Question HTML
+    $('questionBox').innerHTML = qData.text;
+
+    // Render Options
+    const optBox = $('optionsBox');
+    optBox.innerHTML = '';
+    
+    let optionsToRender = [...qData.options];
+    if (currentQuizData.shuffleQuestions) {
+        optionsToRender = shuffleArray(optionsToRender); // Shuffle options per view
+    }
+
+    optionsToRender.forEach((optText, index) => {
+        const btn = document.createElement('button');
+        btn.className = 'opt-btn';
+        
+        // Assign letters A, B, C, D...
+        const letter = String.fromCharCode(65 + index);
+        btn.innerHTML = `<span style="font-weight:bold; width:24px;">${letter}.</span> <span>${optText}</span>`;
+        
+        if (studentAnswers[currentQIndex] === optText) {
+            btn.style.borderColor = 'var(--primary)';
+            btn.style.background = 'var(--bg-body)';
+        }
+
+        btn.onclick = () => selectOption(optText);
+        optBox.appendChild(btn);
+    });
+
+    // Handle Per Question Timer
+    clearInterval(perQTimerInterval);
+    const perQBadge = $('timerPerQ');
+    if (currentQuizData.perQuestionSeconds > 0) {
+        perQBadge.classList.remove('hidden');
+        perQSecondsLeft = currentQuizData.perQuestionSeconds;
+        perQBadge.textContent = `${perQSecondsLeft}s`;
+        perQBadge.style.color = "inherit";
+
+        perQTimerInterval = setInterval(() => {
+            perQSecondsLeft--;
+            perQBadge.textContent = `${perQSecondsLeft}s`;
+            if (perQSecondsLeft <= 5) perQBadge.style.color = "var(--danger)";
+            if (perQSecondsLeft <= 0) {
+                clearInterval(perQTimerInterval);
+                navigateQuestion(1); // Force next
+            }
+        }, 1000);
+    } else {
+        perQBadge.classList.add('hidden');
+    }
+
+    // Nav Buttons logic
+    $('prevBtn').disabled = currentQIndex === 0;
+    
+    if (currentQIndex === currentQuestions.length - 1) {
+        $('nextBtn').classList.add('hidden');
+        $('finishBtn').classList.remove('hidden');
+    } else {
+        $('nextBtn').classList.remove('hidden');
+        $('finishBtn').classList.add('hidden');
+    }
+}
+
+function selectOption(selectedText) {
+    studentAnswers[currentQIndex] = selectedText;
+    renderCurrentQuestion(); // re-render to highlight selection
+}
+
+function navigateQuestion(step) {
+    currentQIndex += step;
+    
+    if (currentQIndex >= currentQuestions.length) {
+        currentQIndex = currentQuestions.length - 1;
+        confirmFinishQuiz();
+    } else {
+        renderCurrentQuestion();
+    }
+}
+
+function updateTimerDisplay(id, totalSeconds) {
+    if (totalSeconds < 0) totalSeconds = 0;
+    const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+    const s = (totalSeconds % 60).toString().padStart(2, '0');
+    const el = $(id);
+    el.textContent = `${m}:${s}`;
+    if (totalSeconds <= 60 && el.parentElement.classList.contains('timer-badge')) {
+        el.parentElement.style.animation = 'pulse 1s infinite';
+    }
+}
+
+function calculateLiveScore() {
+    let correctCount = 0;
+    for (let i = 0; i < currentQuestions.length; i++) {
+        if (studentAnswers[i] && studentAnswers[i] === currentQuestions[i].answer) {
+            correctCount++;
+        }
+    }
+    const marksPerQ = currentQuizData.totalMarks / currentQuestions.length;
+    $('liveScore').textContent = `Score: ${(correctCount * marksPerQ).toFixed(1)}`;
+}
+
+// 15. SUBMISSION & REVIEW
+function confirmFinishQuiz() {
+    if (confirm("Are you sure you want to submit the quiz?")) {
+        autoSubmitQuiz();
+    }
+}
+
+function autoSubmitQuiz() {
+    clearInterval(mainTimerInterval);
+    clearInterval(perQTimerInterval);
+    $('quizSection').classList.add('hidden');
+    $('studentInfoDisplay').classList.add('hidden');
+    $('appContainer').style.paddingBottom = "80px"; // restore padding
+    
+    generateReport();
+}
+
+function generateReport() {
+    $('reviewSection').classList.remove('hidden');
+
+    const totalQ = currentQuestions.length;
+    const marksPerQ = currentQuizData.totalMarks / totalQ;
+    let correctCount = 0;
+    let wrongCount = 0;
+    let skippedCount = 0;
+
+    let reviewHtml = `<div class="review-list-container">
+        <div class="report-header">
+            <div class="report-meta-grid">
+                <div><b>Student:</b> ${studentProfile.name} (${studentProfile.place})</div>
+                <div><b>Exam:</b> ${currentQuizData.metaExam || 'N/A'}</div>
+                <div><b>Subject:</b> ${currentQuizData.metaSubject || 'N/A'}</div>
+                <div><b>Date:</b> ${new Date().toLocaleDateString()}</div>
+            </div>
+            <div class="report-score-box">
+                <div class="score-item"><span class="score-lbl">Total Qs</span><span class="score-val">${totalQ}</span></div>
+                <div class="score-item"><span class="score-lbl">Correct</span><span class="score-val" style="color:var(--success)" id="rcCount">0</span></div>
+                <div class="score-item"><span class="score-lbl">Wrong</span><span class="score-val" style="color:var(--danger)" id="rwCount">0</span></div>
+                <div class="score-item"><span class="score-lbl">Skipped</span><span class="score-val" id="rsCount">0</span></div>
+            </div>
+        </div>
+    `;
+
+    currentQuestions.forEach((q, i) => {
+        const sAns = studentAnswers[i];
+        const isCorrect = sAns === q.answer;
+        const isSkipped = !sAns;
+
+        if (isCorrect) correctCount++;
+        else if (isSkipped) skippedCount++;
+        else wrongCount++;
+
+        let boxClass = isCorrect ? 'correct-ans' : (isSkipped ? 'skipped-ans' : 'wrong-ans');
+        let icon = isCorrect ? '✅' : (isSkipped ? '⏭️' : '❌');
+
+        reviewHtml += `
+            <div class="review-card">
+                <div class="review-q-row">
+                    <span class="q-num">${i + 1}.</span>
+                    <div>${q.text}</div>
+                </div>
+                <div class="review-ans-row">
+                    <div class="ans-box ${boxClass}">
+                        <span class="ans-label">Your Answer:</span>
+                        <span class="ans-val">${icon} ${sAns || 'Not Answered'}</span>
+                    </div>
+                    <div class="ans-box" style="background:var(--secondary);">
+                        <span class="ans-label">Correct Answer:</span>
+                        <span class="ans-val" style="color:var(--primary)">${q.answer}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+
+    reviewHtml += `</div>`;
+    $('reviewTableContainer').innerHTML = reviewHtml;
+
+    // Update Totals
+    const finalScore = (correctCount * marksPerQ).toFixed(1);
+    $('finalScoreDisplay').textContent = finalScore;
+    $('rcCount').textContent = correctCount;
+    $('rwCount').textContent = wrongCount;
+    $('rsCount').textContent = skippedCount;
+
+    const pfElement = $('passFailText');
+    if (parseFloat(finalScore) >= currentQuizData.minPassMarks) {
+        pfElement.textContent = "PASS";
+        pfElement.style.color = "var(--success)";
+    } else {
+        pfElement.textContent = "FAIL";
+        pfElement.style.color = "var(--danger)";
+    }
+}
+
+// 16. SHARING & COMMUNICATION
+function generateResultTextForShare() {
+    const finalScore = $('finalScoreDisplay').textContent;
+    const pf = $('passFailText').textContent;
+    return `*Quiz Result*\n\nStudent: ${studentProfile.name}\nExam: ${currentQuizData.metaExam}\nScore: ${finalScore}/${currentQuizData.totalMarks}\nStatus: ${pf}\n\nGenerated via Quiz Master Pro`;
+}
+
+function sendResultViaWhatsApp() {
+    let phone = currentQuizData.teacherWhatsapp || '';
+    // Strip non-numeric
+    phone = phone.replace(/\D/g, ''); 
+    const text = encodeURIComponent(generateResultTextForShare());
+    const url = phone ? `https://wa.me/${phone}?text=${text}` : `https://api.whatsapp.com/send?text=${text}`;
+    window.open(url, '_blank');
+}
+
+function sendResultViaEmail() {
+    const email = currentQuizData.creatorEmail || '';
+    const subject = encodeURIComponent(`Quiz Result: ${studentProfile.name} - ${currentQuizData.metaExam}`);
+    const body = encodeURIComponent(generateResultTextForShare());
+    window.open(`mailto:${email}?subject=${subject}&body=${body}`);
+}
+
+// Inject keyframes for pulse animation dynamically
+const styleSheet = document.createElement("style");
+styleSheet.innerText = `
+  @keyframes pulse {
+    0% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.05); opacity: 0.8; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+`;
+document.head.appendChild(styleSheet);
