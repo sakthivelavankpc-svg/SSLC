@@ -485,6 +485,10 @@ function testQuizLocally(source) {
 
     currentQuizData = { ...meta, questions: questions };
     $('creatorPanel').classList.add('hidden');
+    // Add this single line before you render the first question
+if (window.EnterpriseModule) {
+    window.EnterpriseModule.applyRandomizationIfEnabled(currentQuizData);
+}
     
     // Automatically fill test info
     $('studentName').value = "Creator Test";
@@ -767,6 +771,14 @@ function generateReport() {
         pfElement.textContent = "FAIL";
         pfElement.style.color = "var(--danger)";
     }
+    if (window.EnterpriseModule) {
+    const totalQ = currentQuizData.questions ? currentQuizData.questions.length : 100;
+    window.EnterpriseModule.submitEnterpriseResult(
+        parseInt($('finalScoreDisplay').textContent), 
+        totalQ, 
+        currentQuizData.metaExam
+    );
+}
 }
 
 // 16. SHARING & COMMUNICATION
@@ -802,3 +814,442 @@ styleSheet.innerText = `
   }
 `;
 document.head.appendChild(styleSheet);
+// ==========================================
+// v18 ENTERPRISE EXTENSION LOGIC
+// ==========================================
+import { collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+
+const EnterpriseModule = {
+    state: {
+        profile: {},
+        currentSessionId: null,
+        autoSaveInterval: null
+    },
+
+    init() {
+        console.log("🚀 Quiz Master Pro v18 Enterprise Initialized");
+        this.bindEvents();
+        this.injectEnterpriseImporter();
+    },
+
+    bindEvents() {
+        // Intercept standard quiz start to require profile
+        const originalStartBtn = document.getElementById('startQuizBtn'); // Assuming this is your v17 start button ID
+        if (originalStartBtn) {
+            originalStartBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                document.getElementById('v18-profile-modal').style.display = 'flex';
+            }, true);
+        }
+
+        // Handle Enterprise Profile Submission
+        document.getElementById('v18-start-exam-btn').addEventListener('click', () => {
+            const name = document.getElementById('v18-student-name').value;
+            const id = document.getElementById('v18-student-id').value;
+            if (!name || !id) {
+                alert("Name and Student ID are required!");
+                return;
+            }
+
+            this.state.profile = {
+                name: name,
+                studentId: id,
+                city: document.getElementById('v18-student-city').value || 'N/A',
+                school: document.getElementById('v18-student-school').value || 'N/A',
+                device: navigator.userAgent,
+                startTime: Date.now()
+            };
+
+            document.getElementById('v18-profile-modal').style.display = 'none';
+            this.startAutoSaveSession();
+            
+            // Trigger original v17 start logic programmatically
+            // If your original script relies on inline onclick, you might need to invoke that function directly here.
+            if (typeof window.startQuiz === "function") window.startQuiz(); 
+        });
+
+        // Leaderboard Controls
+        document.getElementById('v18-leaderboard-trigger').addEventListener('click', () => this.fetchAndShowLeaderboard());
+        document.getElementById('v18-close-leaderboard').addEventListener('click', () => {
+            document.getElementById('v18-leaderboard-modal').style.display = 'none';
+        });
+
+        // Enterprise File Upload Listener
+        const excelInput = document.getElementById('v18-excel-upload');
+        if(excelInput) {
+            excelInput.addEventListener('change', (e) => this.handleExcelImport(e));
+        }
+    },
+
+    // ------------------------------------------
+    // FEATURE: AUTO SAVE & SESSION MANAGER
+    // ------------------------------------------
+    startAutoSaveSession() {
+        this.state.currentSessionId = `session_${this.state.profile.studentId}_${Date.now()}`;
+        
+        this.state.autoSaveInterval = setInterval(() => {
+            // Assuming your v17 state holds answers in a global variable like `studentAnswers`
+            const sessionData = {
+                profile: this.state.profile,
+                answers: window.studentAnswers || {}, 
+                lastSaved: Date.now()
+            };
+            
+            // Save locally for offline resilience (IndexedDB via localForage)
+            localforage.setItem(this.state.currentSessionId, sessionData).then(() => {
+                console.log("💾 Offline Session Auto-Saved");
+            });
+
+        }, 5000); // Save every 5 seconds
+    },
+
+    // ------------------------------------------
+    // FEATURE: ENTERPRISE LEADERBOARD SUBMISSION
+    // ------------------------------------------
+    async submitEnterpriseResult(finalScore, totalQuestions, metaExamName) {
+        clearInterval(this.state.autoSaveInterval);
+        const timeTakenMs = Date.now() - this.state.profile.startTime;
+        
+        const resultData = {
+            ...this.state.profile,
+            examName: metaExamName,
+            score: finalScore,
+            percentage: (finalScore / totalQuestions) * 100,
+            timeTaken: timeTakenMs,
+            submittedAt: serverTimestamp()
+        };
+
+        try {
+            // Write to v18 specific collection, leaving v17 data untouched
+            await addDoc(collection(db, "exam_results"), resultData);
+            console.log("✅ Result logged to Enterprise Leaderboard");
+        } catch (error) {
+            console.error("Firebase Leaderboard Error:", error);
+            // Fallback to offline sync queue here
+        }
+    },
+
+    // ------------------------------------------
+    // FEATURE: GLOBAL LEADERBOARD FETCHING
+    // ------------------------------------------
+    async fetchAndShowLeaderboard() {
+        const modal = document.getElementById('v18-leaderboard-modal');
+        const tbody = document.getElementById('v18-leaderboard-body');
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">Loading Enterprise Data...</td></tr>';
+        modal.style.display = 'flex';
+
+        try {
+            const q = query(collection(db, "exam_results"), orderBy("score", "desc"), limit(50));
+            const querySnapshot = await getDocs(q);
+            
+            tbody.innerHTML = '';
+            let rank = 1;
+            
+            querySnapshot.forEach((doc) => {
+                const data = doc.data();
+                const timeMinutes = Math.floor(data.timeTaken / 60000);
+                const timeSeconds = Math.floor((data.timeTaken % 60000) / 1000);
+                const timeStr = `${timeMinutes}m ${timeSeconds}s`;
+
+                let rankMedal = rank;
+                if (rank === 1) rankMedal = '🥇';
+                if (rank === 2) rankMedal = '🥈';
+                if (rank === 3) rankMedal = '🥉';
+
+                const tr = document.createElement('tr');
+                tr.style.borderBottom = "1px solid var(--border)";
+                tr.innerHTML = `
+                    <td style="padding: 10px; font-weight: bold;">${rankMedal}</td>
+                    <td style="padding: 10px;">${this.sanitizeHTML(data.name)}<br><small style="color:var(--text-light)">ID: ${this.sanitizeHTML(data.studentId)}</small></td>
+                    <td style="padding: 10px; color: var(--success); font-weight: bold;">${data.score}</td>
+                    <td style="padding: 10px;">${this.sanitizeHTML(data.city)}</td>
+                    <td style="padding: 10px;">${timeStr}</td>
+                `;
+                tbody.appendChild(tr);
+                rank++;
+            });
+
+            if (querySnapshot.empty) {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No submissions yet.</td></tr>';
+            }
+
+        } catch (error) {
+            console.error("Error fetching leaderboard:", error);
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color: var(--danger);">Failed to load data. Check permissions.</td></tr>';
+        }
+    },
+
+    // ------------------------------------------
+    // FEATURE: EXCEL & RICH TEXT IMPORTER (SheetJS)
+    // ------------------------------------------
+    injectEnterpriseImporter() {
+        // Appends the advanced import UI near the existing Creator Studio area
+        const creatorArea = document.getElementById('creatorStudioSection'); // Assuming v17 ID
+        if (creatorArea) {
+            creatorArea.appendChild(document.getElementById('v18-enterprise-import-ui'));
+            document.getElementById('v18-enterprise-import-ui').style.display = 'block';
+        }
+    },
+
+    handleExcelImport(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, {type: 'array'});
+            const firstSheetName = workbook.SheetNames[0];
+            const worksheet = workbook.Sheets[firstSheetName];
+            
+            // Convert to JSON with raw values preserved for Rich Text processing later
+            const json = XLSX.utils.sheet_to_json(worksheet, {defval: ""});
+            
+            this.processEnterpriseQuestions(json);
+        };
+        reader.readAsArrayBuffer(file);
+    },
+
+    processEnterpriseQuestions(rows) {
+        let imported = 0, duplicates = 0, skipped = 0;
+        const processedBank = window.currentQuizData?.questions || []; // Hooking into v17 state
+        const existingQuestionTexts = new Set(processedBank.map(q => q.qText.trim().toLowerCase()));
+
+        rows.forEach(row => {
+            // Mapping assumptions based on standard formats: Q, A, B, C, D, Answer
+            const qText = row['Question'] || row['Q'];
+            if (!qText) { skipped++; return; }
+
+            // DUPLICATE DETECTOR
+            if (existingQuestionTexts.has(qText.trim().toLowerCase())) {
+                duplicates++;
+                return;
+            }
+
+            const newQuestion = {
+                qText: this.sanitizeHTML(qText),
+                options: [
+                    this.sanitizeHTML(row['Option 1'] || row['A']),
+                    this.sanitizeHTML(row['Option 2'] || row['B']),
+                    this.sanitizeHTML(row['Option 3'] || row['C']),
+                    this.sanitizeHTML(row['Option 4'] || row['D'])
+                ].filter(Boolean),
+                correctAnswer: this.sanitizeHTML(row['Correct'] || row['Answer']),
+                difficulty: row['Difficulty'] || 'Medium'
+            };
+
+            processedBank.push(newQuestion);
+            existingQuestionTexts.add(newQuestion.qText.trim().toLowerCase());
+            imported++;
+        });
+
+        // Update v17 global state safely
+        if (window.currentQuizData) {
+            window.currentQuizData.questions = processedBank;
+        }
+
+        document.getElementById('v18-import-stats').innerHTML = `
+            <span style="color:var(--success)">✅ Imported: ${imported}</span> | 
+            <span style="color:var(--accent)">⚠️ Duplicates: ${duplicates}</span> | 
+            <span style="color:var(--danger)">❌ Skipped: ${skipped}</span>
+        `;
+        
+        // Trigger v17 UI refresh if applicable
+        if (typeof window.renderCreatorQuestions === "function") window.renderCreatorQuestions();
+    },
+
+    // ------------------------------------------
+    // SECURITY: XSS SANITIZATION
+    // ------------------------------------------
+    sanitizeHTML(str) {
+        if (!str) return "";
+        // Safely allows formatting but strips dangerous script tags
+        const temp = document.createElement('div');
+        temp.textContent = str;
+        let safeStr = temp.innerHTML;
+        
+        // Restore safe HTML tags requested by user (Rich Text)
+        safeStr = safeStr.replace(/&lt;b&gt;/g, '<b>').replace(/&lt;\/b&gt;/g, '</b>');
+        safeStr = safeStr.replace(/&lt;i&gt;/g, '<i>').replace(/&lt;\/i&gt;/g, '</i>');
+        safeStr = safeStr.replace(/&lt;u&gt;/g, '<u>').replace(/&lt;\/u&gt;/g, '</u>');
+        safeStr = safeStr.replace(/&lt;br&gt;/g, '<br>');
+        
+        return safeStr;
+    }
+};
+
+// Initialize Enterprise features once the DOM is ready
+document.addEventListener("DOMContentLoaded", () => {
+    EnterpriseModule.init();
+});
+// Add this to your main init
+localforage.getItem('last_active_session').then(session => {
+    if(session) {
+        // Logic to prompt user: "Do you want to resume your previous exam?"
+    }
+});
+// To hook the submission into your v17 completion function:
+// In your original code, find where `generateResultTextForShare` or the final score calculation happens,
+// and append this line:
+// if (window.EnterpriseModule) window.EnterpriseModule.submitEnterpriseResult(finalScore, currentQuizData.totalMarks, currentQuizData.metaExam);
+
+window.EnterpriseModule = EnterpriseModule;
+// ==========================================
+// v18 ENTERPRISE: PHASE 2 INJECTION
+// Random Engine & Analytics Integration
+// ==========================================
+
+// Ensure Firebase imports are available in this scope (from Phase 1)
+import { collection, query, orderBy, getDocs } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+
+if (window.EnterpriseModule) {
+    Object.assign(window.EnterpriseModule, {
+        
+        // ------------------------------------------
+        // FEATURE 9 & 10: RANDOM QUESTION ENGINE
+        // ------------------------------------------
+        
+        /**
+         * Takes a large question bank and securely extracts a randomized subset.
+         * Also randomizes the options for each question while preserving the correct answer index.
+         * * @param {Array} fullQuestionBank - The complete array of imported questions
+         * @param {Number} count - How many questions to deliver to the student
+         */
+        generateRandomExam(fullQuestionBank, count) {
+            if (!fullQuestionBank || fullQuestionBank.length === 0) return [];
+            
+            // 1. Shuffle the entire question bank (Fisher-Yates)
+            let shuffledBank = [...fullQuestionBank];
+            for (let i = shuffledBank.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [shuffledBank[i], shuffledBank[j]] = [shuffledBank[j], shuffledBank[i]];
+            }
+            
+            // 2. Slice the requested number of questions
+            let selectedQuestions = shuffledBank.slice(0, count);
+            
+            // 3. Randomize options independently for each question
+            selectedQuestions = selectedQuestions.map(q => {
+                let options = [...q.options];
+                let correctText = q.correctAnswer; 
+                
+                // Shuffle options
+                for (let i = options.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [options[i], options[j]] = [options[j], options[i]];
+                }
+                
+                return {
+                    ...q,
+                    options: options,
+                    // The correct answer text remains exactly the same, 
+                    // your v17 checking logic will still match it correctly by value.
+                    correctAnswer: correctText 
+                };
+            });
+            
+            console.log(`🎲 Generated random exam: ${count} questions from a pool of ${fullQuestionBank.length}`);
+            return selectedQuestions;
+        },
+
+        // Hook to intercept v17 quiz start if randomization is toggled
+        applyRandomizationIfEnabled(currentQuizData) {
+            // Check if teacher set a specific chunk size in the data (e.g., from Creator Studio)
+            const requestedSize = currentQuizData.randomSubsetSize || null; 
+            if (requestedSize && currentQuizData.questions.length > requestedSize) {
+                currentQuizData.questions = this.generateRandomExam(currentQuizData.questions, requestedSize);
+                currentQuizData.totalMarks = currentQuizData.questions.length;
+            }
+        },
+
+        // ------------------------------------------
+        // FEATURE 18: EXAM ANALYTICS DASHBOARD
+        // ------------------------------------------
+        
+        bindAnalyticsEvents() {
+            const trigger = document.getElementById('v18-analytics-trigger');
+            const closeBtn = document.getElementById('v18-close-analytics');
+            
+            if(trigger) {
+                // Only show analytics trigger if user is a creator (you can tie this to your v17 auth state)
+                trigger.style.display = 'block'; 
+                trigger.addEventListener('click', () => this.fetchAndRenderAnalytics());
+            }
+            if(closeBtn) {
+                closeBtn.addEventListener('click', () => {
+                    document.getElementById('v18-analytics-modal').style.display = 'none';
+                });
+            }
+        },
+
+        async fetchAndRenderAnalytics() {
+            const modal = document.getElementById('v18-analytics-modal');
+            const tbody = document.getElementById('v18-analytics-table-body');
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">Calculating Enterprise Analytics...</td></tr>';
+            modal.style.display = 'flex';
+
+            try {
+                // Fetch all results (In a true production environment with 10k+ rows, you'd paginate this)
+                const q = query(collection(window.db, "exam_results"), orderBy("submittedAt", "desc"));
+                const querySnapshot = await getDocs(q);
+                
+                let totalScore = 0;
+                let highestScore = 0;
+                let submissionCount = 0;
+                
+                tbody.innerHTML = '';
+                
+                querySnapshot.forEach((doc) => {
+                    const data = doc.data();
+                    submissionCount++;
+                    totalScore += data.percentage || 0;
+                    
+                    if (data.score > highestScore) highestScore = data.score;
+
+                    // Format Time
+                    const timeMinutes = Math.floor((data.timeTaken || 0) / 60000);
+                    const timeSeconds = Math.floor(((data.timeTaken || 0) % 60000) / 1000);
+                    
+                    // Format Date safely
+                    const dateStr = data.submittedAt ? new Date(data.submittedAt.toDate()).toLocaleDateString() : 'N/A';
+
+                    const tr = document.createElement('tr');
+                    tr.style.borderBottom = "1px solid var(--border)";
+                    tr.innerHTML = `
+                        <td style="padding: 10px;">${dateStr}</td>
+                        <td style="padding: 10px;"><b>${this.sanitizeHTML(data.name)}</b> <br><small>${this.sanitizeHTML(data.studentId)}</small></td>
+                        <td style="padding: 10px; color: var(--primary); font-weight: bold;">${data.score} (${Math.round(data.percentage || 0)}%)</td>
+                        <td style="padding: 10px;">${timeMinutes}m ${timeSeconds}s</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+
+                // Update Dashboard Metric Cards
+                const avgPercentage = submissionCount > 0 ? (totalScore / submissionCount).toFixed(1) : 0;
+                
+                document.getElementById('v18-stat-avg').textContent = `${avgPercentage}%`;
+                document.getElementById('v18-stat-high').textContent = highestScore;
+                document.getElementById('v18-stat-total').textContent = submissionCount;
+
+                if (querySnapshot.empty) {
+                    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">No analytics data available yet.</td></tr>';
+                }
+
+            } catch (error) {
+                console.error("Analytics Error:", error);
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color: var(--danger);">Failed to load analytics.</td></tr>';
+            }
+        }
+    });
+
+    // Initialize the new bindings
+    window.EnterpriseModule.bindAnalyticsEvents();
+}
+// Logic hint for pagination
+const PAGE_SIZE = 50;
+function renderQuestionBankPage(pageIndex) {
+    const start = pageIndex * PAGE_SIZE;
+    const slice = allQuestions.slice(start, start + PAGE_SIZE);
+    // Render only this slice
+}
