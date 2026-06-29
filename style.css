@@ -106,7 +106,6 @@ button { cursor: pointer; font-family: inherit; transition: all 0.2s; border: no
 .question-card { background: var(--surface); padding: 20px; border-radius: 16px; box-shadow: var(--shadow); margin-bottom: 20px; }
 .q-text { font-size: 1.2rem; font-weight: 600; line-height: 1.4; }
 
-/* Dynamic options tag configurations */
 .q-text u, .review-q-row u { text-underline-offset: 4px; text-decoration-thickness: 2px; }
 
 .options-grid { display: grid; grid-template-columns: 1fr; gap: 12px; overflow-y: auto; padding-bottom: 80px; }
@@ -160,7 +159,6 @@ th { background: var(--secondary); font-weight: 600; }
 @media (min-width: 768px) { .options-grid { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 600px) { .input-grid, .input-grid.three-col, .review-ans-row { grid-template-columns: 1fr; } }
 
-/* --- HIGH FIDELITY PRINT REPORT STYLES --- */
 @media print {
     body { background: #ffffff !important; color: #000000 !important; }
     body * { visibility: hidden; }

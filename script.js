@@ -1,7 +1,8 @@
 // 1. IMPORT FIREBASE MODULES
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
 import { 
-    getFirestore, collection, getDocs, addDoc, deleteDoc, doc, updateDoc, getDoc, serverTimestamp 
+    getFirestore, collection, getDocs, addDoc, deleteDoc, doc, updateDoc, getDoc, serverTimestamp,
+    query, where, orderBy, limit, startAfter
 } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
 // 2. CONFIGURATION
@@ -23,6 +24,7 @@ const $ = (id) => document.getElementById(id);
 
 function showToast(message, type = 'info') {
     const container = $('toastContainer');
+    if (!container) return;
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
     toast.style.backgroundColor = type === 'error' ? 'var(--danger)' : (type === 'success' ? 'var(--success)' : '#333');
@@ -39,6 +41,7 @@ function generateId() {
 }
 
 function shuffleArray(array) {
+    if (!Array.isArray(array)) return [];
     let arr = [...array];
     for (let i = arr.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -57,20 +60,318 @@ let mainTimerInterval = null;
 let perQTimerInterval = null;
 let mainSecondsLeft = 0;
 let perQSecondsLeft = 0;
-let studentProfile = { name: '', place: '' };
+let studentProfile = { name: '', place: '', studentId: '', school: '' };
 let csvParsedQuestions = [];
+
+// ==========================================
+// UNIFIED ENTERPRISE MODULE
+// ==========================================
+const EnterpriseModule = {
+    state: {
+        currentSessionId: null,
+        autoSaveInterval: null
+    },
+
+    init() {
+        this.bindEvents();
+        this.injectEnterpriseImporter();
+        this.checkOfflineSession();
+    },
+
+    bindEvents() {
+        const leaderboardTrigger = $('v18-leaderboard-trigger');
+        const closeLeaderboard = $('v18-close-leaderboard');
+        const excelUpload = $('v18-excel-upload');
+        const analyticsTrigger = $('v18-analytics-trigger');
+        const closeAnalytics = $('v18-close-analytics');
+
+        if (leaderboardTrigger) leaderboardTrigger.addEventListener('click', () => this.fetchAndShowLeaderboard());
+        if (closeLeaderboard) closeLeaderboard.addEventListener('click', () => $('v18-leaderboard-modal').classList.add('hidden'));
+        if (excelUpload) excelUpload.addEventListener('change', (e) => this.handleExcelImport(e));
+        
+        if (analyticsTrigger) {
+            analyticsTrigger.style.display = 'block';
+            analyticsTrigger.addEventListener('click', () => this.fetchAndRenderAnalytics());
+        }
+        if (closeAnalytics) closeAnalytics.addEventListener('click', () => $('v18-analytics-modal').classList.add('hidden'));
+    },
+
+    startAutoSaveSession() {
+        if (this.state.autoSaveInterval) clearInterval(this.state.autoSaveInterval);
+        this.state.currentSessionId = `session_${studentProfile.studentId}_${Date.now()}`;
+        
+        this.state.autoSaveInterval = setInterval(() => {
+            const sessionData = {
+                profile: studentProfile,
+                answers: studentAnswers || {}, 
+                lastSaved: Date.now()
+            };
+            
+            if (window.localforage) {
+                localforage.setItem(this.state.currentSessionId, sessionData).catch(console.warn);
+            }
+        }, 5000); 
+    },
+
+    async submitEnterpriseResult(finalScore, totalQuestions, metaExamName) {
+        if (this.state.autoSaveInterval) clearInterval(this.state.autoSaveInterval);
+        
+        const timeTakenMs = Date.now() - (studentProfile.startTime || Date.now());
+        
+        const resultData = {
+            ...studentProfile,
+            examName: metaExamName,
+            score: finalScore,
+            percentage: totalQuestions > 0 ? (finalScore / totalQuestions) * 100 : 0,
+            timeTaken: timeTakenMs,
+            submittedAt: serverTimestamp()
+        };
+
+        try {
+            await addDoc(collection(db, "exam_results"), resultData);
+        } catch (error) {
+            console.error("Firebase Leaderboard Error:", error);
+        }
+    },
+
+    async fetchAndShowLeaderboard() {
+        const modal = $('v18-leaderboard-modal');
+        const tbody = $('v18-leaderboard-body');
+        if (!modal || !tbody) return;
+
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">Loading Enterprise Data...</td></tr>';
+        modal.classList.remove('hidden');
+
+        try {
+            const q = query(collection(db, "exam_results"), orderBy("score", "desc"), limit(50));
+            const querySnapshot = await getDocs(q);
+            
+            tbody.innerHTML = '';
+            let rank = 1;
+            
+            querySnapshot.forEach((doc) => {
+                const data = doc.data();
+                const timeMinutes = Math.floor(data.timeTaken / 60000);
+                const timeSeconds = Math.floor((data.timeTaken % 60000) / 1000);
+                const timeStr = `${timeMinutes}m ${timeSeconds}s`;
+
+                let rankMedal = rank;
+                if (rank === 1) rankMedal = '🥇';
+                if (rank === 2) rankMedal = '🥈';
+                if (rank === 3) rankMedal = '🥉';
+
+                const tr = document.createElement('tr');
+                tr.style.borderBottom = "1px solid var(--border)";
+                tr.innerHTML = `
+                    <td style="padding: 10px; font-weight: bold;">${rankMedal}</td>
+                    <td style="padding: 10px;">${this.sanitizeHTML(data.name)}<br><small style="color:var(--text-light)">ID: ${this.sanitizeHTML(data.studentId)}</small></td>
+                    <td style="padding: 10px; color: var(--success); font-weight: bold;">${data.score}</td>
+                    <td style="padding: 10px;">${this.sanitizeHTML(data.place)}</td>
+                    <td style="padding: 10px;">${timeStr}</td>
+                `;
+                tbody.appendChild(tr);
+                rank++;
+            });
+
+            if (querySnapshot.empty) {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No submissions yet.</td></tr>';
+            }
+
+        } catch (error) {
+            console.error("Error fetching leaderboard:", error);
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color: var(--danger);">Failed to load data. Check permissions.</td></tr>';
+        }
+    },
+
+    async fetchAndRenderAnalytics() {
+        const modal = $('v18-analytics-modal');
+        const tbody = $('v18-analytics-table-body');
+        if (!modal || !tbody) return;
+
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">Calculating Enterprise Analytics...</td></tr>';
+        modal.classList.remove('hidden');
+
+        try {
+            const q = query(collection(db, "exam_results"), orderBy("submittedAt", "desc"));
+            const querySnapshot = await getDocs(q);
+            
+            let totalScore = 0;
+            let highestScore = 0;
+            let submissionCount = 0;
+            
+            tbody.innerHTML = '';
+            
+            querySnapshot.forEach((doc) => {
+                const data = doc.data();
+                submissionCount++;
+                totalScore += data.percentage || 0;
+                if (data.score > highestScore) highestScore = data.score;
+
+                const timeMinutes = Math.floor((data.timeTaken || 0) / 60000);
+                const timeSeconds = Math.floor(((data.timeTaken || 0) % 60000) / 1000);
+                const dateStr = data.submittedAt ? new Date(data.submittedAt.toDate()).toLocaleDateString() : 'N/A';
+
+                const tr = document.createElement('tr');
+                tr.style.borderBottom = "1px solid var(--border)";
+                tr.innerHTML = `
+                    <td style="padding: 10px;">${dateStr}</td>
+                    <td style="padding: 10px;"><b>${this.sanitizeHTML(data.name)}</b> <br><small>${this.sanitizeHTML(data.studentId)}</small></td>
+                    <td style="padding: 10px; color: var(--primary); font-weight: bold;">${data.score} (${Math.round(data.percentage || 0)}%)</td>
+                    <td style="padding: 10px;">${timeMinutes}m ${timeSeconds}s</td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            const avgPercentage = submissionCount > 0 ? (totalScore / submissionCount).toFixed(1) : 0;
+            const avgEl = $('v18-stat-avg');
+            const highEl = $('v18-stat-high');
+            const totalEl = $('v18-stat-total');
+
+            if (avgEl) avgEl.textContent = `${avgPercentage}%`;
+            if (highEl) highEl.textContent = highestScore;
+            if (totalEl) totalEl.textContent = submissionCount;
+
+            if (querySnapshot.empty) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">No analytics data available yet.</td></tr>';
+            }
+
+        } catch (error) {
+            console.error("Analytics Error:", error);
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color: var(--danger);">Failed to load analytics.</td></tr>';
+        }
+    },
+
+    injectEnterpriseImporter() {
+        const creatorArea = $('creatorPanel');
+        const importUI = $('v18-enterprise-import-ui');
+        if (creatorArea && importUI) {
+            creatorArea.appendChild(importUI);
+            importUI.style.display = 'block';
+        }
+    },
+
+    handleExcelImport(event) {
+        const file = event.target.files[0];
+        if (!file || !window.XLSX) return;
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, {type: 'array'});
+                const firstSheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[firstSheetName];
+                const json = XLSX.utils.sheet_to_json(worksheet, {defval: ""});
+                this.processEnterpriseQuestions(json);
+            } catch (err) {
+                showToast("Failed to parse Excel file", "error");
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    },
+
+    processEnterpriseQuestions(rows) {
+        let imported = 0, duplicates = 0, skipped = 0;
+        const processedBank = csvParsedQuestions || [];
+        const existingQuestionTexts = new Set(processedBank.map(q => q.text.trim().toLowerCase()));
+
+        rows.forEach(row => {
+            const qText = row['Question'] || row['Q'];
+            if (!qText) { skipped++; return; }
+
+            if (existingQuestionTexts.has(qText.trim().toLowerCase())) {
+                duplicates++;
+                return;
+            }
+
+            const newQuestion = {
+                text: this.sanitizeHTML(qText),
+                options: [
+                    this.sanitizeHTML(row['Option 1'] || row['A']),
+                    this.sanitizeHTML(row['Option 2'] || row['B']),
+                    this.sanitizeHTML(row['Option 3'] || row['C']),
+                    this.sanitizeHTML(row['Option 4'] || row['D'])
+                ].filter(Boolean),
+                answer: this.sanitizeHTML(row['Correct'] || row['Answer']),
+                difficulty: row['Difficulty'] || 'Medium'
+            };
+
+            processedBank.push(newQuestion);
+            existingQuestionTexts.add(newQuestion.text.trim().toLowerCase());
+            imported++;
+        });
+
+        csvParsedQuestions = processedBank;
+
+        const importStats = $('v18-import-stats');
+        if (importStats) {
+            importStats.innerHTML = `
+                <span style="color:var(--success)">✅ Imported: ${imported}</span> | 
+                <span style="color:var(--accent)">⚠️ Duplicates: ${duplicates}</span> | 
+                <span style="color:var(--danger)">❌ Skipped: ${skipped}</span>
+            `;
+        }
+
+        if (csvParsedQuestions.length > 0) {
+            $('manualSection').classList.add('hidden');
+            $('csvPreview').classList.remove('hidden');
+            showToast(`Successfully imported ${imported} new questions.`, 'success');
+        }
+    },
+
+    generateRandomExam(fullQuestionBank, count) {
+        if (!fullQuestionBank || fullQuestionBank.length === 0) return [];
+        
+        let shuffledBank = shuffleArray([...fullQuestionBank]);
+        let selectedQuestions = shuffledBank.slice(0, count);
+        
+        return selectedQuestions.map(q => {
+            let options = shuffleArray([...q.options]);
+            return { ...q, options: options };
+        });
+    },
+
+    applyRandomizationIfEnabled(quizData) {
+        if (!quizData || !quizData.questions) return;
+        const requestedSize = quizData.randomSubsetSize || null; 
+        if (requestedSize && quizData.questions.length > requestedSize) {
+            quizData.questions = this.generateRandomExam(quizData.questions, requestedSize);
+            quizData.totalMarks = quizData.questions.length;
+        }
+    },
+
+    sanitizeHTML(str) {
+        if (!str) return "";
+        const temp = document.createElement('div');
+        temp.textContent = str;
+        let safeStr = temp.innerHTML;
+        safeStr = safeStr.replace(/&lt;b&gt;/gi, '<b>').replace(/&lt;\/b&gt;/gi, '</b>');
+        safeStr = safeStr.replace(/&lt;i&gt;/gi, '<i>').replace(/&lt;\/i&gt;/gi, '</i>');
+        safeStr = safeStr.replace(/&lt;u&gt;/gi, '<u>').replace(/&lt;\/u&gt;/gi, '</u>');
+        safeStr = safeStr.replace(/&lt;br\s*\/?&gt;/gi, '<br>');
+        return safeStr;
+    },
+
+    checkOfflineSession() {
+        if (window.localforage) {
+            localforage.getItem('last_active_session').then(session => {
+                if (session) console.log("Previous session found, restoration possible.");
+            }).catch(() => {});
+        }
+    }
+};
 
 // 6. INITIALIZATION & ROUTING
 window.addEventListener('load', async () => {
     initTheme();
     loadLocalProfiles();
     attachEventListeners();
+    EnterpriseModule.init();
 
     const urlParams = new URLSearchParams(window.location.search);
     const quizId = urlParams.get('quiz');
 
     if (quizId) {
-        // Direct link to play a quiz
         $('librarySection').classList.add('hidden');
         await fetchAndStartSharedQuiz(quizId);
     } else {
@@ -88,9 +389,9 @@ function loadLocalProfiles() {
     const cName = localStorage.getItem('creatorName');
     const cEmail = localStorage.getItem('creatorEmail');
     const tWa = localStorage.getItem('teacherWhatsapp');
-    if (cName) $('creatorName').value = cName;
-    if (cEmail) $('creatorEmail').value = cEmail;
-    if (tWa) $('teacherWhatsapp').value = tWa;
+    if (cName && $('creatorName')) $('creatorName').value = cName;
+    if (cEmail && $('creatorEmail')) $('creatorEmail').value = cEmail;
+    if (tWa && $('teacherWhatsapp')) $('teacherWhatsapp').value = tWa;
 }
 
 function saveLocalProfiles() {
@@ -101,30 +402,27 @@ function saveLocalProfiles() {
 
 // 7. EVENT LISTENERS SETUP
 function attachEventListeners() {
-    // Top bar actions
-    $('themeToggleBtn').addEventListener('click', () => {
+    if ($('themeToggleBtn')) $('themeToggleBtn').addEventListener('click', () => {
         document.body.classList.toggle('dark-mode');
         localStorage.setItem('theme', document.body.classList.contains('dark-mode') ? 'dark' : 'light');
     });
 
-    $('toggleCreatorBtn').addEventListener('click', () => {
+    if ($('toggleCreatorBtn')) $('toggleCreatorBtn').addEventListener('click', () => {
         $('librarySection').classList.toggle('hidden');
         $('creatorPanel').classList.toggle('hidden');
     });
 
-    $('closeCreatorBtn').addEventListener('click', () => {
+    if ($('closeCreatorBtn')) $('closeCreatorBtn').addEventListener('click', () => {
         $('creatorPanel').classList.add('hidden');
         $('librarySection').classList.remove('hidden');
-        loadLibraryFromCloud(); // Refresh
+        loadLibraryFromCloud();
     });
 
-    // Library Filters
-    $('libSearch').addEventListener('input', renderLibraryGrid);
-    $('filterSubject').addEventListener('change', renderLibraryGrid);
-    $('filterClass').addEventListener('change', renderLibraryGrid);
+    if ($('libSearch')) $('libSearch').addEventListener('input', renderLibraryGrid);
+    if ($('filterSubject')) $('filterSubject').addEventListener('change', renderLibraryGrid);
+    if ($('filterClass')) $('filterClass').addEventListener('change', renderLibraryGrid);
 
-    // Creator Actions
-    $('createManualBtn').addEventListener('click', () => {
+    if ($('createManualBtn')) $('createManualBtn').addEventListener('click', () => {
         $('manualSection').classList.remove('hidden');
         $('csvPreview').classList.add('hidden');
         if ($('manualTable').getElementsByTagName('tbody')[0].children.length === 0) {
@@ -132,38 +430,33 @@ function attachEventListeners() {
         }
     });
 
-    $('addRowBtn').addEventListener('click', addManualRow);
-    $('startQuizBtn_manual').addEventListener('click', () => testQuizLocally('manual'));
-    $('saveToLibraryBtn').addEventListener('click', () => publishQuizToCloud('manual'));
+    if ($('addRowBtn')) $('addRowBtn').addEventListener('click', addManualRow);
+    if ($('startQuizBtn_manual')) $('startQuizBtn_manual').addEventListener('click', () => testQuizLocally('manual'));
+    if ($('saveToLibraryBtn')) $('saveToLibraryBtn').addEventListener('click', () => publishQuizToCloud('manual'));
 
-    // CSV Actions
-    $('loadCSVBtn').addEventListener('click', () => $('csvFileInput').click());
-    $('csvFileInput').addEventListener('change', handleCSVUpload);
-    $('startQuizBtn_csv').addEventListener('click', () => testQuizLocally('csv'));
-    $('saveCsvToLibBtn').addEventListener('click', () => publishQuizToCloud('csv'));
+    if ($('loadCSVBtn')) $('loadCSVBtn').addEventListener('click', () => $('csvFileInput').click());
+    if ($('csvFileInput')) $('csvFileInput').addEventListener('change', handleCSVUpload);
+    if ($('startQuizBtn_csv')) $('startQuizBtn_csv').addEventListener('click', () => testQuizLocally('csv'));
+    if ($('saveCsvToLibBtn')) $('saveCsvToLibBtn').addEventListener('click', () => publishQuizToCloud('csv'));
 
-    // Student Modals & Actions
-    $('startStudentQuizBtn').addEventListener('click', beginQuizEngine);
+    if ($('startStudentQuizBtn')) $('startStudentQuizBtn').addEventListener('click', beginQuizEngine);
     
-    // Quiz Engine Navigation
-    $('prevBtn').addEventListener('click', () => navigateQuestion(-1));
-    $('nextBtn').addEventListener('click', () => navigateQuestion(1));
-    $('finishBtn').addEventListener('click', () => confirmFinishQuiz());
+    if ($('prevBtn')) $('prevBtn').addEventListener('click', () => navigateQuestion(-1));
+    if ($('nextBtn')) $('nextBtn').addEventListener('click', () => navigateQuestion(1));
+    if ($('finishBtn')) $('finishBtn').addEventListener('click', () => confirmFinishQuiz());
 
-    // Review Actions
-    $('printPdfBtn').addEventListener('click', () => window.print());
-    $('homeBtn_review').addEventListener('click', () => window.location.href = window.location.pathname);
-    $('submitWhatsappBtn').addEventListener('click', sendResultViaWhatsApp);
-    $('submitEmailBtn').addEventListener('click', sendResultViaEmail);
+    if ($('printPdfBtn')) $('printPdfBtn').addEventListener('click', () => window.print());
+    if ($('homeBtn_review')) $('homeBtn_review').addEventListener('click', () => window.location.href = window.location.pathname);
+    if ($('submitWhatsappBtn')) $('submitWhatsappBtn').addEventListener('click', sendResultViaWhatsApp);
+    if ($('submitEmailBtn')) $('submitEmailBtn').addEventListener('click', sendResultViaEmail);
 
-    // Share Modal
-    $('closeShareBtn').addEventListener('click', () => $('shareModal').classList.add('hidden'));
-    $('copyLinkBtn').addEventListener('click', () => {
+    if ($('closeShareBtn')) $('closeShareBtn').addEventListener('click', () => $('shareModal').classList.add('hidden'));
+    if ($('copyLinkBtn')) $('copyLinkBtn').addEventListener('click', () => {
         $('shareLinkInput').select();
         document.execCommand('copy');
         showToast('Link copied to clipboard!', 'success');
     });
-    $('shareQuizBtn').addEventListener('click', () => {
+    if ($('shareQuizBtn')) $('shareQuizBtn').addEventListener('click', () => {
         showToast('Please publish to cloud first to get a share link.', 'warning');
     });
 }
@@ -187,7 +480,6 @@ async function loadLibraryFromCloud() {
             if (data.metaClass) classes.add(data.metaClass);
         });
 
-        // Populate filters
         populateDropdown('filterSubject', subjects, 'All Subjects');
         populateDropdown('filterClass', classes, 'All Classes');
 
@@ -203,6 +495,7 @@ async function loadLibraryFromCloud() {
 
 function populateDropdown(id, itemsSet, defaultText) {
     const select = $(id);
+    if (!select) return;
     select.innerHTML = `<option value="all">${defaultText}</option>`;
     Array.from(itemsSet).sort().forEach(item => {
         const opt = document.createElement('option');
@@ -214,9 +507,11 @@ function populateDropdown(id, itemsSet, defaultText) {
 
 function renderLibraryGrid() {
     const grid = $('libraryGrid');
-    const searchTerm = $('libSearch').value.toLowerCase();
-    const filterSub = $('filterSubject').value;
-    const filterCls = $('filterClass').value;
+    if (!grid) return;
+    
+    const searchTerm = ($('libSearch')?.value || '').toLowerCase();
+    const filterSub = $('filterSubject')?.value || 'all';
+    const filterCls = $('filterClass')?.value || 'all';
 
     grid.innerHTML = '';
 
@@ -227,7 +522,7 @@ function renderLibraryGrid() {
         const matchesSub = filterSub === 'all' || q.metaSubject === filterSub;
         const matchesCls = filterCls === 'all' || q.metaClass === filterCls;
         return matchesSearch && matchesSub && matchesCls;
-    }).sort((a, b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0)); // Newest first
+    }).sort((a, b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0));
 
     if (filtered.length === 0) {
         grid.innerHTML = '<div style="grid-column: 1/-1; text-align:center; padding: 20px; color: var(--text-light);">No quizzes found matching filters.</div>';
@@ -239,12 +534,12 @@ function renderLibraryGrid() {
         card.className = 'quiz-card';
         card.innerHTML = `
             <div style="display:flex; justify-content:space-between;">
-                <span class="card-badge" style="background:var(--primary)">${quiz.metaClass || 'N/A'} - ${quiz.metaSubject || 'N/A'}</span>
+                <span class="card-badge" style="background:var(--primary)">${EnterpriseModule.sanitizeHTML(quiz.metaClass) || 'N/A'} - ${EnterpriseModule.sanitizeHTML(quiz.metaSubject) || 'N/A'}</span>
                 <span class="card-badge" style="background:var(--accent)">${quiz.questions?.length || 0} Qs</span>
             </div>
-            <h4 class="card-title">${quiz.metaExam || 'Untitled Exam'}</h4>
-            <div class="card-sub">Topic: ${quiz.metaTopic || 'N/A'}</div>
-            <div class="card-sub">By: ${quiz.creatorName || 'Unknown'}</div>
+            <h4 class="card-title">${EnterpriseModule.sanitizeHTML(quiz.metaExam) || 'Untitled Exam'}</h4>
+            <div class="card-sub">Topic: ${EnterpriseModule.sanitizeHTML(quiz.metaTopic) || 'N/A'}</div>
+            <div class="card-sub">By: ${EnterpriseModule.sanitizeHTML(quiz.creatorName) || 'Unknown'}</div>
             <div style="display:flex; gap:5px; margin-top:10px;">
                 <button class="btn-sm btn-primary" onclick="window.playQuiz('${quiz.id}')"><i class="ri-play-fill"></i> Play</button>
                 <button class="btn-sm btn-secondary" onclick="window.shareExistingQuiz('${quiz.id}')"><i class="ri-share-line"></i></button>
@@ -289,19 +584,19 @@ window.deleteQuiz = async (quizId, correctPwd) => {
 // 9. CREATOR STUDIO & DATA GATHERING
 function getMetadata() {
     return {
-        creatorName: $('creatorName').value.trim(),
-        creatorPassword: $('creatorPassword').value.trim(),
-        creatorEmail: $('creatorEmail').value.trim(),
-        metaExam: $('metaExam').value.trim(),
-        metaSubject: $('metaSubject').value.trim(),
-        metaClass: $('metaClass').value.trim(),
-        metaTopic: $('metaTopic').value.trim(),
-        totalMinutes: Number($('totalMinutes').value) || 0,
-        totalMarks: Number($('totalMarks').value) || 100,
-        perQuestionSeconds: Number($('perQuestionSeconds').value) || 0,
-        minPassMarks: Number($('minPassMarks').value) || 40,
-        shuffleQuestions: $('shuffleQuestions').checked,
-        teacherWhatsapp: $('teacherWhatsapp').value.trim()
+        creatorName: $('creatorName')?.value.trim(),
+        creatorPassword: $('creatorPassword')?.value.trim(),
+        creatorEmail: $('creatorEmail')?.value.trim(),
+        metaExam: $('metaExam')?.value.trim(),
+        metaSubject: $('metaSubject')?.value.trim(),
+        metaClass: $('metaClass')?.value.trim(),
+        metaTopic: $('metaTopic')?.value.trim(),
+        totalMinutes: Number($('totalMinutes')?.value) || 0,
+        totalMarks: Number($('totalMarks')?.value) || 100,
+        perQuestionSeconds: Number($('perQuestionSeconds')?.value) || 0,
+        minPassMarks: Number($('minPassMarks')?.value) || 40,
+        shuffleQuestions: $('shuffleQuestions')?.checked || false,
+        teacherWhatsapp: $('teacherWhatsapp')?.value.trim()
     };
 }
 
@@ -315,7 +610,8 @@ function validateMetadata(meta) {
 
 // 10. MANUAL EDITOR
 function addManualRow() {
-    const tbody = $('manualTable').getElementsByTagName('tbody')[0];
+    const tbody = $('manualTable')?.getElementsByTagName('tbody')[0];
+    if (!tbody) return;
     const rowCount = tbody.children.length + 1;
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -332,7 +628,7 @@ function addManualRow() {
 }
 
 function extractManualQuestions() {
-    const rows = $('manualTable').getElementsByTagName('tbody')[0].children;
+    const rows = $('manualTable')?.getElementsByTagName('tbody')[0]?.children || [];
     let questions = [];
     for (let i = 0; i < rows.length; i++) {
         const q = rows[i].querySelector('.q-val').value.trim();
@@ -344,9 +640,9 @@ function extractManualQuestions() {
 
         if (q && ans) {
             questions.push({
-                text: q,
-                options: [a, b, c, d].filter(Boolean),
-                answer: ans
+                text: EnterpriseModule.sanitizeHTML(q),
+                options: [a, b, c, d].filter(Boolean).map(val => EnterpriseModule.sanitizeHTML(val)),
+                answer: EnterpriseModule.sanitizeHTML(ans)
             });
         }
     }
@@ -367,7 +663,6 @@ function handleCSVUpload(e) {
 }
 
 function parseAndPreviewCSV(csvText) {
-    // Basic CSV parser handling quotes
     const rows = [];
     let currentRow = [];
     let currentCell = '';
@@ -377,7 +672,7 @@ function parseAndPreviewCSV(csvText) {
         const char = csvText[i];
         if (inQuotes) {
             if (char === '"') {
-                if (csvText[i + 1] === '"') { currentCell += '"'; i++; } // Escaped quote
+                if (csvText[i + 1] === '"') { currentCell += '"'; i++; } 
                 else { inQuotes = false; }
             } else { currentCell += char; }
         } else {
@@ -385,9 +680,9 @@ function parseAndPreviewCSV(csvText) {
             else if (char === ',') { currentRow.push(currentCell.trim()); currentCell = ''; }
             else if (char === '\n' || char === '\r') {
                 currentRow.push(currentCell.trim());
-                if (currentRow.some(c => c)) rows.push(currentRow); // Skip entirely empty rows
+                if (currentRow.some(c => c)) rows.push(currentRow); 
                 currentRow = []; currentCell = '';
-                if (char === '\r' && csvText[i + 1] === '\n') i++; // Skip Windows CRLF
+                if (char === '\r' && csvText[i + 1] === '\n') i++; 
             } else { currentCell += char; }
         }
     }
@@ -396,28 +691,32 @@ function parseAndPreviewCSV(csvText) {
         rows.push(currentRow);
     }
 
-    // Process rows to Questions
     csvParsedQuestions = [];
     let htmlPreview = `<table><thead><tr><th>#</th><th>Question</th><th>Options</th><th>Answer</th></tr></thead><tbody>`;
     
-    // Assume Header row exists if first row contains "Question"
+    if(rows.length === 0) return showToast("Empty CSV file.", "error");
+
     let startIndex = rows[0].join('').toLowerCase().includes('question') ? 1 : 0;
 
     for (let i = startIndex; i < rows.length; i++) {
         const r = rows[i];
-        if (r.length < 3) continue; // Need at least Q, 1 Opt, Ans
+        if (r.length < 3) continue; 
         
         const qText = r[0];
-        const ansText = r[r.length - 1]; // Assume last column is exact answer
+        const ansText = r[r.length - 1]; 
         const options = r.slice(1, r.length - 1).filter(Boolean);
 
         if (qText && ansText) {
-            csvParsedQuestions.push({ text: qText, options: options, answer: ansText });
+            csvParsedQuestions.push({ 
+                text: EnterpriseModule.sanitizeHTML(qText), 
+                options: options.map(o => EnterpriseModule.sanitizeHTML(o)), 
+                answer: EnterpriseModule.sanitizeHTML(ansText) 
+            });
             htmlPreview += `<tr>
                 <td>${csvParsedQuestions.length}</td>
-                <td>${qText}</td>
-                <td>${options.join(' | ')}</td>
-                <td><b>${ansText}</b></td>
+                <td>${EnterpriseModule.sanitizeHTML(qText)}</td>
+                <td>${options.map(o => EnterpriseModule.sanitizeHTML(o)).join(' | ')}</td>
+                <td><b>${EnterpriseModule.sanitizeHTML(ansText)}</b></td>
             </tr>`;
         }
     }
@@ -446,6 +745,8 @@ async function publishQuizToCloud(source) {
 
     saveLocalProfiles();
     const btn = source === 'manual' ? $('saveToLibraryBtn') : $('saveCsvToLibBtn');
+    if (!btn) return;
+
     const origText = btn.innerHTML;
     btn.innerHTML = "Publishing...";
     btn.disabled = true;
@@ -462,7 +763,6 @@ async function publishQuizToCloud(source) {
         $('creatorPanel').classList.add('hidden');
         $('librarySection').classList.remove('hidden');
         
-        // Setup Share Link directly
         window.shareExistingQuiz(docRef.id);
         loadLibraryFromCloud();
     } catch (e) {
@@ -485,13 +785,11 @@ function testQuizLocally(source) {
 
     currentQuizData = { ...meta, questions: questions };
     $('creatorPanel').classList.add('hidden');
-    // Add this single line before you render the first question
-if (window.EnterpriseModule) {
-    window.EnterpriseModule.applyRandomizationIfEnabled(currentQuizData);
-}
     
-    // Automatically fill test info
+    EnterpriseModule.applyRandomizationIfEnabled(currentQuizData);
+    
     $('studentName').value = "Creator Test";
+    $('v18-student-id').value = "TEST-001";
     $('studentPlace').value = "Studio";
     $('studentLoginModal').classList.remove('hidden');
 }
@@ -511,28 +809,39 @@ async function fetchAndStartSharedQuiz(quizId) {
             $('librarySection').classList.remove('hidden');
         }
     } catch (error) {
+        console.error(error);
         showToast("Error fetching quiz link.", "error");
     }
 }
 
 function beginQuizEngine() {
-    const sName = $('studentName').value.trim();
-    const sPlace = $('studentPlace').value.trim();
+    const sName = $('studentName')?.value.trim();
+    const sId = $('v18-student-id')?.value.trim();
+    const sPlace = $('studentPlace')?.value.trim();
+    const sSchool = $('v18-student-school')?.value.trim();
     
-    if (!sName) {
-        showToast("Please enter your name.", "warning");
+    if (!sName || !sId) {
+        showToast("Full Name and Student ID are required.", "warning");
         return;
     }
 
-    studentProfile = { name: sName, place: sPlace || 'Unknown' };
-    $('dispName').textContent = sName;
-    $('dispPlace').textContent = studentProfile.place;
-    $('studentInfoDisplay').classList.remove('hidden');
+    studentProfile = { 
+        name: sName, 
+        studentId: sId,
+        place: sPlace || 'Unknown', 
+        school: sSchool || 'Unknown',
+        startTime: Date.now()
+    };
+    
+    if ($('dispName')) $('dispName').textContent = sName;
+    if ($('dispPlace')) $('dispPlace').textContent = studentProfile.place;
+    if ($('studentInfoDisplay')) $('studentInfoDisplay').classList.remove('hidden');
 
-    $('studentLoginModal').classList.add('hidden');
-    $('librarySection').classList.add('hidden');
-    $('appContainer').style.paddingBottom = "0"; // remove container padding for full screen quiz
+    if ($('studentLoginModal')) $('studentLoginModal').classList.add('hidden');
+    if ($('librarySection')) $('librarySection').classList.add('hidden');
+    if ($('appContainer')) $('appContainer').style.paddingBottom = "0";
 
+    EnterpriseModule.startAutoSaveSession();
     startQuizEnvironment();
 }
 
@@ -540,16 +849,19 @@ function beginQuizEngine() {
 function startQuizEnvironment() {
     $('quizSection').classList.remove('hidden');
     
-    // Prepare Questions
-    currentQuestions = JSON.parse(JSON.stringify(currentQuizData.questions)); // Deep copy
+    EnterpriseModule.applyRandomizationIfEnabled(currentQuizData);
+
+    currentQuestions = JSON.parse(JSON.stringify(currentQuizData.questions));
     if (currentQuizData.shuffleQuestions) {
         currentQuestions = shuffleArray(currentQuestions);
     }
     
-    studentAnswers = {}; // Reset answers
+    studentAnswers = {}; 
     currentQIndex = 0;
 
-    // Start Main Timer
+    clearInterval(mainTimerInterval);
+    clearInterval(perQTimerInterval);
+
     if (currentQuizData.totalMinutes > 0) {
         mainSecondsLeft = currentQuizData.totalMinutes * 60;
         updateTimerDisplay('mainTimerLabel', mainSecondsLeft);
@@ -570,30 +882,26 @@ function renderCurrentQuestion() {
     if (currentQIndex >= currentQuestions.length) currentQIndex = currentQuestions.length - 1;
 
     const qData = currentQuestions[currentQIndex];
+    if (!qData) return;
     
-    // UI Progress
     $('questionProgressLabel').textContent = `Q ${currentQIndex + 1}/${currentQuestions.length}`;
     const percent = ((currentQIndex + 1) / currentQuestions.length) * 100;
     $('progressBarFill').style.width = `${percent}%`;
     calculateLiveScore();
 
-    // Render Question HTML
     $('questionBox').innerHTML = qData.text;
 
-    // Render Options
     const optBox = $('optionsBox');
     optBox.innerHTML = '';
     
     let optionsToRender = [...qData.options];
     if (currentQuizData.shuffleQuestions) {
-        optionsToRender = shuffleArray(optionsToRender); // Shuffle options per view
+        optionsToRender = shuffleArray(optionsToRender);
     }
 
     optionsToRender.forEach((optText, index) => {
         const btn = document.createElement('button');
         btn.className = 'opt-btn';
-        
-        // Assign letters A, B, C, D...
         const letter = String.fromCharCode(65 + index);
         btn.innerHTML = `<span style="font-weight:bold; width:24px;">${letter}.</span> <span>${optText}</span>`;
         
@@ -606,7 +914,6 @@ function renderCurrentQuestion() {
         optBox.appendChild(btn);
     });
 
-    // Handle Per Question Timer
     clearInterval(perQTimerInterval);
     const perQBadge = $('timerPerQ');
     if (currentQuizData.perQuestionSeconds > 0) {
@@ -621,14 +928,13 @@ function renderCurrentQuestion() {
             if (perQSecondsLeft <= 5) perQBadge.style.color = "var(--danger)";
             if (perQSecondsLeft <= 0) {
                 clearInterval(perQTimerInterval);
-                navigateQuestion(1); // Force next
+                navigateQuestion(1); 
             }
         }, 1000);
     } else {
         perQBadge.classList.add('hidden');
     }
 
-    // Nav Buttons logic
     $('prevBtn').disabled = currentQIndex === 0;
     
     if (currentQIndex === currentQuestions.length - 1) {
@@ -642,7 +948,7 @@ function renderCurrentQuestion() {
 
 function selectOption(selectedText) {
     studentAnswers[currentQIndex] = selectedText;
-    renderCurrentQuestion(); // re-render to highlight selection
+    renderCurrentQuestion(); 
 }
 
 function navigateQuestion(step) {
@@ -661,6 +967,7 @@ function updateTimerDisplay(id, totalSeconds) {
     const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
     const s = (totalSeconds % 60).toString().padStart(2, '0');
     const el = $(id);
+    if (!el) return;
     el.textContent = `${m}:${s}`;
     if (totalSeconds <= 60 && el.parentElement.classList.contains('timer-badge')) {
         el.parentElement.style.animation = 'pulse 1s infinite';
@@ -675,7 +982,7 @@ function calculateLiveScore() {
         }
     }
     const marksPerQ = currentQuizData.totalMarks / currentQuestions.length;
-    $('liveScore').textContent = `Score: ${(correctCount * marksPerQ).toFixed(1)}`;
+    if ($('liveScore')) $('liveScore').textContent = `Score: ${(correctCount * marksPerQ).toFixed(1)}`;
 }
 
 // 15. SUBMISSION & REVIEW
@@ -688,9 +995,9 @@ function confirmFinishQuiz() {
 function autoSubmitQuiz() {
     clearInterval(mainTimerInterval);
     clearInterval(perQTimerInterval);
-    $('quizSection').classList.add('hidden');
-    $('studentInfoDisplay').classList.add('hidden');
-    $('appContainer').style.paddingBottom = "80px"; // restore padding
+    if ($('quizSection')) $('quizSection').classList.add('hidden');
+    if ($('studentInfoDisplay')) $('studentInfoDisplay').classList.add('hidden');
+    if ($('appContainer')) $('appContainer').style.paddingBottom = "80px";
     
     generateReport();
 }
@@ -707,10 +1014,10 @@ function generateReport() {
     let reviewHtml = `<div class="review-list-container">
         <div class="report-header">
             <div class="report-meta-grid">
-                <div><b>Student:</b> ${studentProfile.name} (${studentProfile.place})</div>
-                <div><b>Exam:</b> ${currentQuizData.metaExam || 'N/A'}</div>
-                <div><b>Subject:</b> ${currentQuizData.metaSubject || 'N/A'}</div>
-                <div><b>Date:</b> ${new Date().toLocaleDateString()}</div>
+                <div><b>Student:</b> ${EnterpriseModule.sanitizeHTML(studentProfile.name)} (${EnterpriseModule.sanitizeHTML(studentProfile.place)})</div>
+                <div><b>ID:</b> ${EnterpriseModule.sanitizeHTML(studentProfile.studentId)}</div>
+                <div><b>Exam:</b> ${EnterpriseModule.sanitizeHTML(currentQuizData.metaExam) || 'N/A'}</div>
+                <div><b>Subject:</b> ${EnterpriseModule.sanitizeHTML(currentQuizData.metaSubject) || 'N/A'}</div>
             </div>
             <div class="report-score-box">
                 <div class="score-item"><span class="score-lbl">Total Qs</span><span class="score-val">${totalQ}</span></div>
@@ -756,7 +1063,6 @@ function generateReport() {
     reviewHtml += `</div>`;
     $('reviewTableContainer').innerHTML = reviewHtml;
 
-    // Update Totals
     const finalScore = (correctCount * marksPerQ).toFixed(1);
     $('finalScoreDisplay').textContent = finalScore;
     $('rcCount').textContent = correctCount;
@@ -771,26 +1077,23 @@ function generateReport() {
         pfElement.textContent = "FAIL";
         pfElement.style.color = "var(--danger)";
     }
-    if (window.EnterpriseModule) {
-    const totalQ = currentQuizData.questions ? currentQuizData.questions.length : 100;
-    window.EnterpriseModule.submitEnterpriseResult(
-        parseInt($('finalScoreDisplay').textContent), 
+    
+    EnterpriseModule.submitEnterpriseResult(
+        parseFloat(finalScore), 
         totalQ, 
         currentQuizData.metaExam
     );
 }
-}
 
 // 16. SHARING & COMMUNICATION
 function generateResultTextForShare() {
-    const finalScore = $('finalScoreDisplay').textContent;
-    const pf = $('passFailText').textContent;
-    return `*Quiz Result*\n\nStudent: ${studentProfile.name}\nExam: ${currentQuizData.metaExam}\nScore: ${finalScore}/${currentQuizData.totalMarks}\nStatus: ${pf}\n\nGenerated via Quiz Master Pro`;
+    const finalScore = $('finalScoreDisplay')?.textContent || '0';
+    const pf = $('passFailText')?.textContent || '';
+    return `*Quiz Result*\n\nStudent: ${studentProfile.name}\nID: ${studentProfile.studentId}\nExam: ${currentQuizData.metaExam}\nScore: ${finalScore}/${currentQuizData.totalMarks}\nStatus: ${pf}\n\nGenerated via Quiz Master Pro`;
 }
 
 function sendResultViaWhatsApp() {
     let phone = currentQuizData.teacherWhatsapp || '';
-    // Strip non-numeric
     phone = phone.replace(/\D/g, ''); 
     const text = encodeURIComponent(generateResultTextForShare());
     const url = phone ? `https://wa.me/${phone}?text=${text}` : `https://api.whatsapp.com/send?text=${text}`;
@@ -804,7 +1107,6 @@ function sendResultViaEmail() {
     window.open(`mailto:${email}?subject=${subject}&body=${body}`);
 }
 
-// Inject keyframes for pulse animation dynamically
 const styleSheet = document.createElement("style");
 styleSheet.innerText = `
   @keyframes pulse {
@@ -814,439 +1116,3 @@ styleSheet.innerText = `
   }
 `;
 document.head.appendChild(styleSheet);
-// ==========================================
-// v18 ENTERPRISE EXTENSION LOGIC
-// ==========================================
-
-const EnterpriseModule = {
-    state: {
-        profile: {},
-        currentSessionId: null,
-        autoSaveInterval: null
-    },
-
-    init() {
-        console.log("🚀 Quiz Master Pro v18 Enterprise Initialized");
-        this.bindEvents();
-        this.injectEnterpriseImporter();
-    },
-
-    bindEvents() {
-        // Intercept standard quiz start to require profile
-        const originalStartBtn = document.getElementById('startQuizBtn'); // Assuming this is your v17 start button ID
-        if (originalStartBtn) {
-            originalStartBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                document.getElementById('v18-profile-modal').style.display = 'flex';
-            }, true);
-        }
-
-        // Handle Enterprise Profile Submission
-        document.getElementById('v18-start-exam-btn').addEventListener('click', () => {
-            const name = document.getElementById('v18-student-name').value;
-            const id = document.getElementById('v18-student-id').value;
-            if (!name || !id) {
-                alert("Name and Student ID are required!");
-                return;
-            }
-
-            this.state.profile = {
-                name: name,
-                studentId: id,
-                city: document.getElementById('v18-student-city').value || 'N/A',
-                school: document.getElementById('v18-student-school').value || 'N/A',
-                device: navigator.userAgent,
-                startTime: Date.now()
-            };
-
-            document.getElementById('v18-profile-modal').style.display = 'none';
-            this.startAutoSaveSession();
-            
-            // Trigger original v17 start logic programmatically
-            // If your original script relies on inline onclick, you might need to invoke that function directly here.
-            if (typeof window.startQuiz === "function") window.startQuiz(); 
-        });
-
-        // Leaderboard Controls
-        document.getElementById('v18-leaderboard-trigger').addEventListener('click', () => this.fetchAndShowLeaderboard());
-        document.getElementById('v18-close-leaderboard').addEventListener('click', () => {
-            document.getElementById('v18-leaderboard-modal').style.display = 'none';
-        });
-
-        // Enterprise File Upload Listener
-        const excelInput = document.getElementById('v18-excel-upload');
-        if(excelInput) {
-            excelInput.addEventListener('change', (e) => this.handleExcelImport(e));
-        }
-    },
-
-    // ------------------------------------------
-    // FEATURE: AUTO SAVE & SESSION MANAGER
-    // ------------------------------------------
-    startAutoSaveSession() {
-        this.state.currentSessionId = `session_${this.state.profile.studentId}_${Date.now()}`;
-        
-        this.state.autoSaveInterval = setInterval(() => {
-            // Assuming your v17 state holds answers in a global variable like `studentAnswers`
-            const sessionData = {
-                profile: this.state.profile,
-                answers: window.studentAnswers || {}, 
-                lastSaved: Date.now()
-            };
-            
-            // Save locally for offline resilience (IndexedDB via localForage)
-            localforage.setItem(this.state.currentSessionId, sessionData).then(() => {
-                console.log("💾 Offline Session Auto-Saved");
-            });
-
-        }, 5000); // Save every 5 seconds
-    },
-
-    // ------------------------------------------
-    // FEATURE: ENTERPRISE LEADERBOARD SUBMISSION
-    // ------------------------------------------
-    async submitEnterpriseResult(finalScore, totalQuestions, metaExamName) {
-        clearInterval(this.state.autoSaveInterval);
-        const timeTakenMs = Date.now() - this.state.profile.startTime;
-        
-        const resultData = {
-            ...this.state.profile,
-            examName: metaExamName,
-            score: finalScore,
-            percentage: (finalScore / totalQuestions) * 100,
-            timeTaken: timeTakenMs,
-            submittedAt: serverTimestamp()
-        };
-
-        try {
-            // Write to v18 specific collection, leaving v17 data untouched
-            await addDoc(collection(db, "exam_results"), resultData);
-            console.log("✅ Result logged to Enterprise Leaderboard");
-        } catch (error) {
-            console.error("Firebase Leaderboard Error:", error);
-            // Fallback to offline sync queue here
-        }
-    },
-
-    // ------------------------------------------
-    // FEATURE: GLOBAL LEADERBOARD FETCHING
-    // ------------------------------------------
-    async fetchAndShowLeaderboard() {
-        const modal = document.getElementById('v18-leaderboard-modal');
-        const tbody = document.getElementById('v18-leaderboard-body');
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">Loading Enterprise Data...</td></tr>';
-        modal.style.display = 'flex';
-
-        try {
-            const q = query(collection(db, "exam_results"), orderBy("score", "desc"), limit(50));
-            const querySnapshot = await getDocs(q);
-            
-            tbody.innerHTML = '';
-            let rank = 1;
-            
-            querySnapshot.forEach((doc) => {
-                const data = doc.data();
-                const timeMinutes = Math.floor(data.timeTaken / 60000);
-                const timeSeconds = Math.floor((data.timeTaken % 60000) / 1000);
-                const timeStr = `${timeMinutes}m ${timeSeconds}s`;
-
-                let rankMedal = rank;
-                if (rank === 1) rankMedal = '🥇';
-                if (rank === 2) rankMedal = '🥈';
-                if (rank === 3) rankMedal = '🥉';
-
-                const tr = document.createElement('tr');
-                tr.style.borderBottom = "1px solid var(--border)";
-                tr.innerHTML = `
-                    <td style="padding: 10px; font-weight: bold;">${rankMedal}</td>
-                    <td style="padding: 10px;">${this.sanitizeHTML(data.name)}<br><small style="color:var(--text-light)">ID: ${this.sanitizeHTML(data.studentId)}</small></td>
-                    <td style="padding: 10px; color: var(--success); font-weight: bold;">${data.score}</td>
-                    <td style="padding: 10px;">${this.sanitizeHTML(data.city)}</td>
-                    <td style="padding: 10px;">${timeStr}</td>
-                `;
-                tbody.appendChild(tr);
-                rank++;
-            });
-
-            if (querySnapshot.empty) {
-                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No submissions yet.</td></tr>';
-            }
-
-        } catch (error) {
-            console.error("Error fetching leaderboard:", error);
-            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color: var(--danger);">Failed to load data. Check permissions.</td></tr>';
-        }
-    },
-
-    // ------------------------------------------
-    // FEATURE: EXCEL & RICH TEXT IMPORTER (SheetJS)
-    // ------------------------------------------
-    injectEnterpriseImporter() {
-        // Appends the advanced import UI near the existing Creator Studio area
-        const creatorArea = document.getElementById('creatorStudioSection'); // Assuming v17 ID
-        if (creatorArea) {
-            creatorArea.appendChild(document.getElementById('v18-enterprise-import-ui'));
-            document.getElementById('v18-enterprise-import-ui').style.display = 'block';
-        }
-    },
-
-    handleExcelImport(event) {
-        const file = event.target.files[0];
-        if (!file) return;
-
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const data = new Uint8Array(e.target.result);
-            const workbook = XLSX.read(data, {type: 'array'});
-            const firstSheetName = workbook.SheetNames[0];
-            const worksheet = workbook.Sheets[firstSheetName];
-            
-            // Convert to JSON with raw values preserved for Rich Text processing later
-            const json = XLSX.utils.sheet_to_json(worksheet, {defval: ""});
-            
-            this.processEnterpriseQuestions(json);
-        };
-        reader.readAsArrayBuffer(file);
-    },
-
-    processEnterpriseQuestions(rows) {
-        let imported = 0, duplicates = 0, skipped = 0;
-        const processedBank = window.currentQuizData?.questions || []; // Hooking into v17 state
-        const existingQuestionTexts = new Set(processedBank.map(q => q.qText.trim().toLowerCase()));
-
-        rows.forEach(row => {
-            // Mapping assumptions based on standard formats: Q, A, B, C, D, Answer
-            const qText = row['Question'] || row['Q'];
-            if (!qText) { skipped++; return; }
-
-            // DUPLICATE DETECTOR
-            if (existingQuestionTexts.has(qText.trim().toLowerCase())) {
-                duplicates++;
-                return;
-            }
-
-            const newQuestion = {
-                qText: this.sanitizeHTML(qText),
-                options: [
-                    this.sanitizeHTML(row['Option 1'] || row['A']),
-                    this.sanitizeHTML(row['Option 2'] || row['B']),
-                    this.sanitizeHTML(row['Option 3'] || row['C']),
-                    this.sanitizeHTML(row['Option 4'] || row['D'])
-                ].filter(Boolean),
-                correctAnswer: this.sanitizeHTML(row['Correct'] || row['Answer']),
-                difficulty: row['Difficulty'] || 'Medium'
-            };
-
-            processedBank.push(newQuestion);
-            existingQuestionTexts.add(newQuestion.qText.trim().toLowerCase());
-            imported++;
-        });
-
-        // Update v17 global state safely
-        if (window.currentQuizData) {
-            window.currentQuizData.questions = processedBank;
-        }
-
-        document.getElementById('v18-import-stats').innerHTML = `
-            <span style="color:var(--success)">✅ Imported: ${imported}</span> | 
-            <span style="color:var(--accent)">⚠️ Duplicates: ${duplicates}</span> | 
-            <span style="color:var(--danger)">❌ Skipped: ${skipped}</span>
-        `;
-        
-        // Trigger v17 UI refresh if applicable
-        if (typeof window.renderCreatorQuestions === "function") window.renderCreatorQuestions();
-    },
-
-    // ------------------------------------------
-    // SECURITY: XSS SANITIZATION
-    // ------------------------------------------
-    sanitizeHTML(str) {
-        if (!str) return "";
-        // Safely allows formatting but strips dangerous script tags
-        const temp = document.createElement('div');
-        temp.textContent = str;
-        let safeStr = temp.innerHTML;
-        
-        // Restore safe HTML tags requested by user (Rich Text)
-        safeStr = safeStr.replace(/&lt;b&gt;/g, '<b>').replace(/&lt;\/b&gt;/g, '</b>');
-        safeStr = safeStr.replace(/&lt;i&gt;/g, '<i>').replace(/&lt;\/i&gt;/g, '</i>');
-        safeStr = safeStr.replace(/&lt;u&gt;/g, '<u>').replace(/&lt;\/u&gt;/g, '</u>');
-        safeStr = safeStr.replace(/&lt;br&gt;/g, '<br>');
-        
-        return safeStr;
-    }
-};
-
-// Initialize Enterprise features once the DOM is ready
-document.addEventListener("DOMContentLoaded", () => {
-    EnterpriseModule.init();
-});
-// Add this to your main init
-localforage.getItem('last_active_session').then(session => {
-    if(session) {
-        // Logic to prompt user: "Do you want to resume your previous exam?"
-    }
-});
-// To hook the submission into your v17 completion function:
-// In your original code, find where `generateResultTextForShare` or the final score calculation happens,
-// and append this line:
-// if (window.EnterpriseModule) window.EnterpriseModule.submitEnterpriseResult(finalScore, currentQuizData.totalMarks, currentQuizData.metaExam);
-
-window.EnterpriseModule = EnterpriseModule;
-// ==========================================
-// v18 ENTERPRISE: PHASE 2 INJECTION
-// Random Engine & Analytics Integration
-// ==========================================
-
-
-if (window.EnterpriseModule) {
-    Object.assign(window.EnterpriseModule, {
-        
-        // ------------------------------------------
-        // FEATURE 9 & 10: RANDOM QUESTION ENGINE
-        // ------------------------------------------
-        
-        /**
-         * Takes a large question bank and securely extracts a randomized subset.
-         * Also randomizes the options for each question while preserving the correct answer index.
-         * * @param {Array} fullQuestionBank - The complete array of imported questions
-         * @param {Number} count - How many questions to deliver to the student
-         */
-        generateRandomExam(fullQuestionBank, count) {
-            if (!fullQuestionBank || fullQuestionBank.length === 0) return [];
-            
-            // 1. Shuffle the entire question bank (Fisher-Yates)
-            let shuffledBank = [...fullQuestionBank];
-            for (let i = shuffledBank.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
-                [shuffledBank[i], shuffledBank[j]] = [shuffledBank[j], shuffledBank[i]];
-            }
-            
-            // 2. Slice the requested number of questions
-            let selectedQuestions = shuffledBank.slice(0, count);
-            
-            // 3. Randomize options independently for each question
-            selectedQuestions = selectedQuestions.map(q => {
-                let options = [...q.options];
-                let correctText = q.correctAnswer; 
-                
-                // Shuffle options
-                for (let i = options.length - 1; i > 0; i--) {
-                    const j = Math.floor(Math.random() * (i + 1));
-                    [options[i], options[j]] = [options[j], options[i]];
-                }
-                
-                return {
-                    ...q,
-                    options: options,
-                    // The correct answer text remains exactly the same, 
-                    // your v17 checking logic will still match it correctly by value.
-                    correctAnswer: correctText 
-                };
-            });
-            
-            console.log(`🎲 Generated random exam: ${count} questions from a pool of ${fullQuestionBank.length}`);
-            return selectedQuestions;
-        },
-
-        // Hook to intercept v17 quiz start if randomization is toggled
-        applyRandomizationIfEnabled(currentQuizData) {
-            // Check if teacher set a specific chunk size in the data (e.g., from Creator Studio)
-            const requestedSize = currentQuizData.randomSubsetSize || null; 
-            if (requestedSize && currentQuizData.questions.length > requestedSize) {
-                currentQuizData.questions = this.generateRandomExam(currentQuizData.questions, requestedSize);
-                currentQuizData.totalMarks = currentQuizData.questions.length;
-            }
-        },
-
-        // ------------------------------------------
-        // FEATURE 18: EXAM ANALYTICS DASHBOARD
-        // ------------------------------------------
-        
-        bindAnalyticsEvents() {
-            const trigger = document.getElementById('v18-analytics-trigger');
-            const closeBtn = document.getElementById('v18-close-analytics');
-            
-            if(trigger) {
-                // Only show analytics trigger if user is a creator (you can tie this to your v17 auth state)
-                trigger.style.display = 'block'; 
-                trigger.addEventListener('click', () => this.fetchAndRenderAnalytics());
-            }
-            if(closeBtn) {
-                closeBtn.addEventListener('click', () => {
-                    document.getElementById('v18-analytics-modal').style.display = 'none';
-                });
-            }
-        },
-
-        async fetchAndRenderAnalytics() {
-            const modal = document.getElementById('v18-analytics-modal');
-            const tbody = document.getElementById('v18-analytics-table-body');
-            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">Calculating Enterprise Analytics...</td></tr>';
-            modal.style.display = 'flex';
-
-            try {
-                // Fetch all results (In a true production environment with 10k+ rows, you'd paginate this)
-                const q = query(collection(window.db, "exam_results"), orderBy("submittedAt", "desc"));
-                const querySnapshot = await getDocs(q);
-                
-                let totalScore = 0;
-                let highestScore = 0;
-                let submissionCount = 0;
-                
-                tbody.innerHTML = '';
-                
-                querySnapshot.forEach((doc) => {
-                    const data = doc.data();
-                    submissionCount++;
-                    totalScore += data.percentage || 0;
-                    
-                    if (data.score > highestScore) highestScore = data.score;
-
-                    // Format Time
-                    const timeMinutes = Math.floor((data.timeTaken || 0) / 60000);
-                    const timeSeconds = Math.floor(((data.timeTaken || 0) % 60000) / 1000);
-                    
-                    // Format Date safely
-                    const dateStr = data.submittedAt ? new Date(data.submittedAt.toDate()).toLocaleDateString() : 'N/A';
-
-                    const tr = document.createElement('tr');
-                    tr.style.borderBottom = "1px solid var(--border)";
-                    tr.innerHTML = `
-                        <td style="padding: 10px;">${dateStr}</td>
-                        <td style="padding: 10px;"><b>${this.sanitizeHTML(data.name)}</b> <br><small>${this.sanitizeHTML(data.studentId)}</small></td>
-                        <td style="padding: 10px; color: var(--primary); font-weight: bold;">${data.score} (${Math.round(data.percentage || 0)}%)</td>
-                        <td style="padding: 10px;">${timeMinutes}m ${timeSeconds}s</td>
-                    `;
-                    tbody.appendChild(tr);
-                });
-
-                // Update Dashboard Metric Cards
-                const avgPercentage = submissionCount > 0 ? (totalScore / submissionCount).toFixed(1) : 0;
-                
-                document.getElementById('v18-stat-avg').textContent = `${avgPercentage}%`;
-                document.getElementById('v18-stat-high').textContent = highestScore;
-                document.getElementById('v18-stat-total').textContent = submissionCount;
-
-                if (querySnapshot.empty) {
-                    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">No analytics data available yet.</td></tr>';
-                }
-
-            } catch (error) {
-                console.error("Analytics Error:", error);
-                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color: var(--danger);">Failed to load analytics.</td></tr>';
-            }
-        }
-    });
-
-    // Initialize the new bindings
-    window.EnterpriseModule.bindAnalyticsEvents();
-}
-// Logic hint for pagination
-const PAGE_SIZE = 50;
-function renderQuestionBankPage(pageIndex) {
-    const start = pageIndex * PAGE_SIZE;
-    const slice = allQuestions.slice(start, start + PAGE_SIZE);
-    // Render only this slice
-}
