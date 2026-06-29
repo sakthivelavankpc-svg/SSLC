@@ -817,7 +817,6 @@ document.head.appendChild(styleSheet);
 // ==========================================
 // v18 ENTERPRISE EXTENSION LOGIC
 // ==========================================
-import { collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
 const EnterpriseModule = {
     state: {
@@ -1100,8 +1099,6 @@ window.EnterpriseModule = EnterpriseModule;
 // Random Engine & Analytics Integration
 // ==========================================
 
-// Ensure Firebase imports are available in this scope (from Phase 1)
-import { collection, query, orderBy, getDocs } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
 if (window.EnterpriseModule) {
     Object.assign(window.EnterpriseModule, {
