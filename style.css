@@ -184,3 +184,48 @@ th { background: var(--secondary); font-weight: 600; }
     .review-card { border: 1px solid #cccccc !important; margin-bottom: 12px; }
     .review-ans-row { display: grid !important; grid-template-columns: 1fr 1fr !important; gap: 10px !important; }
 }
+/* V20 ENTERPRISE STYLES */
+.quiz-card-selectable {
+    position: relative;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+.quiz-card-selectable:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 12px rgba(0,0,0,0.1);
+}
+.quiz-card-selectable.selected {
+    border: 2px solid var(--primary);
+    background: rgba(13, 148, 136, 0.05);
+}
+.quiz-card-selectable .select-indicator {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 2px solid var(--border);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: var(--surface);
+    color: transparent;
+}
+.quiz-card-selectable.selected .select-indicator {
+    border-color: var(--primary);
+    background: var(--primary);
+    color: white;
+}
+.group-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 10px;
+}
+.group-actions button {
+    flex: 1;
+    min-width: 80px;
+    font-size: 0.8rem;
+    padding: 6px;
+}

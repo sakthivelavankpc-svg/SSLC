@@ -250,7 +250,7 @@ const EnterpriseModule = {
         }
     },
 
-    handleExcelImport(event) {
+ handleExcelImport(event) {
         const file = event.target.files[0];
         if (!file || !window.XLSX) return;
 
@@ -261,45 +261,85 @@ const EnterpriseModule = {
                 const workbook = XLSX.read(data, {type: 'array'});
                 const firstSheetName = workbook.SheetNames[0];
                 const worksheet = workbook.Sheets[firstSheetName];
-                const json = XLSX.utils.sheet_to_json(worksheet, {defval: ""});
-                this.processEnterpriseQuestions(json);
+                
+                // Read as raw arrays first to detect headers dynamically
+                const rawRows = XLSX.utils.sheet_to_json(worksheet, {header: 1, defval: ""});
+                if (rawRows.length < 2) throw new Error("File seems empty or missing data.");
+                
+                this.processEnterpriseQuestions(rawRows);
             } catch (err) {
-                showToast("Failed to parse Excel file", "error");
+                showToast("Invalid Excel Format. Please download the template.", "error");
             }
         };
         reader.readAsArrayBuffer(file);
     },
 
-    processEnterpriseQuestions(rows) {
-        let imported = 0, duplicates = 0, skipped = 0;
+    processEnterpriseQuestions(rawRows) {
+        let imported = 0, duplicates = 0, skipped = 0, errors = 0;
         const processedBank = csvParsedQuestions || [];
-        const existingQuestionTexts = new Set(processedBank.map(q => q.text.trim().toLowerCase()));
+        const existingQuestionHashes = new Set(processedBank.map(q => this.hashQuestion(q)));
 
-        rows.forEach(row => {
-            const qText = row['Question'] || row['Q'];
-            if (!qText) { skipped++; return; }
-
-            if (existingQuestionTexts.has(qText.trim().toLowerCase())) {
-                duplicates++;
-                return;
+        // Header Mapping Intelligence
+        const headers = rawRows[0].map(h => h.toString().toLowerCase().replace(/[^a-z0-9]/g, ''));
+        
+        const getColIndex = (aliases) => {
+            for (let alias of aliases) {
+                const cleanAlias = alias.toLowerCase().replace(/[^a-z0-9]/g, '');
+                const idx = headers.findIndex(h => h.includes(cleanAlias) || cleanAlias.includes(h));
+                if (idx !== -1) return idx;
             }
+            return -1;
+        };
+
+        const colMap = {
+            q: getColIndex(['question', 'q', 'questiontext', 'questionname']),
+            optA: getColIndex(['optiona', 'a', 'option1', 'choicea']),
+            optB: getColIndex(['optionb', 'b', 'option2', 'choiceb']),
+            optC: getColIndex(['optionc', 'c', 'option3', 'choicec']),
+            optD: getColIndex(['optiond', 'd', 'option4', 'choiced']),
+            ans: getColIndex(['answer', 'correct', 'ans', 'correctoption'])
+        };
+
+        if (colMap.q === -1 || colMap.ans === -1) {
+            showToast("Could not detect Question or Answer columns. Download template.", "error");
+            return;
+        }
+
+        for (let i = 1; i < rawRows.length; i++) {
+            const row = rawRows[i];
+            const qText = row[colMap.q] ? row[colMap.q].toString().trim() : '';
+            
+            if (!qText) { skipped++; continue; }
+
+            const options = [
+                colMap.optA !== -1 ? row[colMap.optA]?.toString().trim() : null,
+                colMap.optB !== -1 ? row[colMap.optB]?.toString().trim() : null,
+                colMap.optC !== -1 ? row[colMap.optC]?.toString().trim() : null,
+                colMap.optD !== -1 ? row[colMap.optD]?.toString().trim() : null
+            ].filter(Boolean);
+
+            const answer = colMap.ans !== -1 ? row[colMap.ans]?.toString().trim() : '';
+
+            // Validation
+            if (options.length < 2) { errors++; continue; }
+            if (!answer || !options.includes(answer)) { errors++; continue; }
 
             const newQuestion = {
                 text: this.sanitizeHTML(qText),
-                options: [
-                    this.sanitizeHTML(row['Option 1'] || row['A']),
-                    this.sanitizeHTML(row['Option 2'] || row['B']),
-                    this.sanitizeHTML(row['Option 3'] || row['C']),
-                    this.sanitizeHTML(row['Option 4'] || row['D'])
-                ].filter(Boolean),
-                answer: this.sanitizeHTML(row['Correct'] || row['Answer']),
-                difficulty: row['Difficulty'] || 'Medium'
+                options: options.map(o => this.sanitizeHTML(o)),
+                answer: this.sanitizeHTML(answer)
             };
 
+            const qHash = this.hashQuestion(newQuestion);
+            if (existingQuestionHashes.has(qHash)) {
+                duplicates++;
+                continue;
+            }
+
             processedBank.push(newQuestion);
-            existingQuestionTexts.add(newQuestion.text.trim().toLowerCase());
+            existingQuestionHashes.add(qHash);
             imported++;
-        });
+        }
 
         csvParsedQuestions = processedBank;
 
@@ -307,18 +347,38 @@ const EnterpriseModule = {
         if (importStats) {
             importStats.innerHTML = `
                 <span style="color:var(--success)">✅ Imported: ${imported}</span> | 
-                <span style="color:var(--accent)">⚠️ Duplicates: ${duplicates}</span> | 
-                <span style="color:var(--danger)">❌ Skipped: ${skipped}</span>
+                <span style="color:var(--accent)">⚠️ Dups: ${duplicates}</span> | 
+                <span style="color:var(--danger)">❌ Skipped/Errors: ${skipped + errors}</span>
             `;
         }
 
         if (csvParsedQuestions.length > 0) {
             $('manualSection').classList.add('hidden');
             $('csvPreview').classList.remove('hidden');
+            // Mock CSV preview update for seamless UX integration
+            this.forceRenderCSVPreview();
             showToast(`Successfully imported ${imported} new questions.`, 'success');
         }
     },
 
+    hashQuestion(qObj) {
+        const clean = (str) => str.toLowerCase().replace(/\s+/g, '').trim();
+        return clean(qObj.text) + '_' + qObj.options.map(clean).sort().join('_');
+    },
+
+    forceRenderCSVPreview() {
+        let htmlPreview = `<table><thead><tr><th>#</th><th>Question</th><th>Options</th><th>Answer</th></tr></thead><tbody>`;
+        csvParsedQuestions.forEach((q, idx) => {
+            htmlPreview += `<tr>
+                <td>${idx + 1}</td>
+                <td>${q.text}</td>
+                <td>${q.options.join(' | ')}</td>
+                <td><b>${q.answer}</b></td>
+            </tr>`;
+        });
+        htmlPreview += `</tbody></table>`;
+        $('csvTableContainer').innerHTML = htmlPreview;
+    },
     generateRandomExam(fullQuestionBank, count) {
         if (!fullQuestionBank || fullQuestionBank.length === 0) return [];
         
@@ -1116,3 +1176,375 @@ styleSheet.innerText = `
   }
 `;
 document.head.appendChild(styleSheet);
+// ==========================================
+// V20 ENTERPRISE EXAM GROUP & EXPORT MODULE
+// ==========================================
+const EnterpriseV20Module = {
+    selectedQuizIdsForGroup: new Set(),
+    globalExamGroups: [],
+
+    init() {
+        this.bindEvents();
+    },
+
+    bindEvents() {
+        const downloadTplBtn = $('v20-download-template');
+        if (downloadTplBtn) downloadTplBtn.addEventListener('click', () => this.downloadExcelTemplate());
+
+        const tabQuizzes = $('v20-tab-quizzes');
+        const tabGroups = $('v20-tab-groups');
+        const createGroupBtn = $('v20-create-group-btn');
+
+        if (tabQuizzes) tabQuizzes.addEventListener('click', () => this.switchTab('quizzes'));
+        if (tabGroups) tabGroups.addEventListener('click', () => {
+            this.switchTab('groups');
+            this.fetchExamGroups();
+        });
+
+        if (createGroupBtn) createGroupBtn.addEventListener('click', () => this.createExamGroup());
+    },
+
+    downloadExcelTemplate() {
+        if (!window.XLSX) return showToast("Excel library not loaded.", "error");
+        
+        const wb = XLSX.utils.book_new();
+        const ws_data = [
+            ["Question", "Option A", "Option B", "Option C", "Option D", "Answer", "Subject", "Class", "Topic", "Difficulty", "Creator"],
+            ["Capital of India?", "Delhi", "Mumbai", "Chennai", "Kolkata", "Delhi", "Geography", "10", "India", "Easy", "Teacher"]
+        ];
+        const ws = XLSX.utils.aoa_to_sheet(ws_data);
+        XLSX.utils.book_append_sheet(wb, ws, "Template");
+        XLSX.writeFile(wb, "QuizMaster_Template.xlsx");
+    },
+
+    switchTab(tab) {
+        const tabQuizzes = $('v20-tab-quizzes');
+        const tabGroups = $('v20-tab-groups');
+        const gridQuizzes = $('libraryGrid');
+        const panelGroups = $('v20-group-manager-panel');
+
+        if (tab === 'quizzes') {
+            tabQuizzes.className = 'btn-primary';
+            tabQuizzes.style.flex = '1';
+            tabGroups.className = 'btn-secondary';
+            tabGroups.style.flex = '1';
+            gridQuizzes.classList.remove('hidden');
+            panelGroups.classList.add('hidden');
+            this.disableMultiSelectMode();
+        } else {
+            tabGroups.className = 'btn-primary';
+            tabQuizzes.className = 'btn-secondary';
+            gridQuizzes.classList.remove('hidden'); // Keep visible for selection
+            panelGroups.classList.remove('hidden');
+            this.enableMultiSelectMode();
+        }
+    },
+
+    enableMultiSelectMode() {
+        this.selectedQuizIdsForGroup.clear();
+        const cards = document.querySelectorAll('#libraryGrid .quiz-card');
+        cards.forEach(card => {
+            const playBtn = card.querySelector('.ri-play-fill').parentElement;
+            const onclickAttr = playBtn.getAttribute('onclick');
+            const quizId = onclickAttr.match(/'([^']+)'/)[1];
+
+            card.classList.add('quiz-card-selectable');
+            
+            // Inject selection indicator if not present
+            if (!card.querySelector('.select-indicator')) {
+                const indicator = document.createElement('div');
+                indicator.className = 'select-indicator';
+                indicator.innerHTML = '<i class="ri-check-line"></i>';
+                card.appendChild(indicator);
+            }
+
+            card.onclick = (e) => {
+                // Prevent trigger if clicking action buttons
+                if (e.target.closest('button')) return; 
+                
+                if (this.selectedQuizIdsForGroup.has(quizId)) {
+                    this.selectedQuizIdsForGroup.delete(quizId);
+                    card.classList.remove('selected');
+                } else {
+                    this.selectedQuizIdsForGroup.add(quizId);
+                    card.classList.add('selected');
+                }
+            };
+        });
+    },
+
+    disableMultiSelectMode() {
+        const cards = document.querySelectorAll('#libraryGrid .quiz-card');
+        cards.forEach(card => {
+            card.classList.remove('quiz-card-selectable', 'selected');
+            card.onclick = null;
+            const indicator = card.querySelector('.select-indicator');
+            if (indicator) indicator.remove();
+        });
+    },
+
+    async createExamGroup() {
+        const groupName = $('v20-group-name').value.trim();
+        if (!groupName) return showToast("Enter an Exam Group Name.", "warning");
+        if (this.selectedQuizIdsForGroup.size < 2) return showToast("Select at least 2 quizzes to group.", "warning");
+
+        const selectedQuizzes = globalQuizzes.filter(q => this.selectedQuizIdsForGroup.has(q.id));
+        
+        let totalQuestions = 0;
+        let topics = new Set();
+        let totalMarks = 0;
+
+        selectedQuizzes.forEach(q => {
+            totalQuestions += (q.questions || []).length;
+            totalMarks += parseInt(q.totalMarks || 0);
+            if (q.metaTopic) topics.add(q.metaTopic);
+        });
+
+        const newGroup = {
+            groupName: groupName,
+            quizIds: Array.from(this.selectedQuizIdsForGroup),
+            topics: Array.from(topics).join(', '),
+            questionCount: totalQuestions,
+            totalMarks: totalMarks,
+            subject: selectedQuizzes[0].metaSubject || 'Mixed',
+            class: selectedQuizzes[0].metaClass || 'Mixed',
+            creator: localStorage.getItem('creatorName') || 'Unknown',
+            createdAt: serverTimestamp()
+        };
+
+        try {
+            const docRef = await addDoc(collection(db, "exam_groups"), newGroup);
+            showToast("Exam Group Created!", "success");
+            $('v20-group-name').value = '';
+            this.selectedQuizIdsForGroup.clear();
+            this.fetchExamGroups();
+        } catch (error) {
+            console.error(error);
+            showToast("Failed to create group", "error");
+        }
+    },
+
+    async fetchExamGroups() {
+        const grid = $('v20-group-grid');
+        grid.innerHTML = '<p>Loading groups...</p>';
+        
+        try {
+            const qSnap = await getDocs(query(collection(db, "exam_groups"), orderBy("createdAt", "desc")));
+            this.globalExamGroups = [];
+            grid.innerHTML = '';
+
+            qSnap.forEach(doc => {
+                const data = doc.data();
+                this.globalExamGroups.push({ id: doc.id, ...data });
+
+                const card = document.createElement('div');
+                card.className = 'quiz-card';
+                card.style.border = '2px solid var(--accent)';
+                card.innerHTML = `
+                    <div style="display:flex; justify-content:space-between;">
+                        <span class="card-badge" style="background:var(--accent)">📦 GROUP</span>
+                        <span class="card-badge" style="background:var(--primary)">${data.questionCount} Qs | ${data.quizIds.length} Topics</span>
+                    </div>
+                    <h4 class="card-title">${EnterpriseModule.sanitizeHTML(data.groupName)}</h4>
+                    <div class="card-sub">Class: ${data.class} | Subject: ${data.subject}</div>
+                    <div class="card-sub">Topics: <small>${data.topics}</small></div>
+                    <div class="group-actions">
+                        <button class="btn-sm btn-primary" onclick="EnterpriseV20Module.playGroup('${doc.id}')"><i class="ri-play-fill"></i> Play</button>
+                        <button class="btn-sm btn-accent" onclick="EnterpriseV20Module.generateGroupPDF('${doc.id}')"><i class="ri-file-pdf-line"></i> PDF</button>
+                        <button class="btn-sm btn-secondary" onclick="EnterpriseV20Module.deleteGroup('${doc.id}')" style="color:var(--danger);"><i class="ri-delete-bin-line"></i></button>
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+
+            if (this.globalExamGroups.length === 0) {
+                grid.innerHTML = '<p>No exam groups found. Select quizzes above and merge them.</p>';
+            }
+
+        } catch (err) {
+            console.error(err);
+            grid.innerHTML = '<p>Error loading groups.</p>';
+        }
+    },
+
+    async playGroup(groupId) {
+        const group = this.globalExamGroups.find(g => g.id === groupId);
+        if (!group) return;
+
+        showToast("Merging Quizzes...", "info");
+        try {
+            let combinedQuestions = [];
+            let combinedMinutes = 0;
+
+            for (let qId of group.quizIds) {
+                const docSnap = await getDoc(doc(db, "quizzes", qId));
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    combinedQuestions = combinedQuestions.concat(data.questions || []);
+                    combinedMinutes += parseInt(data.totalMinutes || 0);
+                }
+            }
+
+            if (combinedQuestions.length === 0) throw new Error("No questions found in referenced quizzes.");
+
+            // Construct unified mock Quiz Data for the engine
+            currentQuizData = {
+                id: `group_${groupId}`,
+                metaExam: group.groupName,
+                metaSubject: group.subject,
+                metaClass: group.class,
+                totalMarks: group.totalMarks,
+                totalMinutes: combinedMinutes,
+                questions: combinedQuestions,
+                shuffleQuestions: true, // Auto-shuffle for groups
+                perQuestionSeconds: 0,
+                minPassMarks: Math.floor(group.totalMarks * 0.4) // 40% default pass
+            };
+
+            $('librarySection').classList.add('hidden');
+            $('studentLoginModal').classList.remove('hidden');
+
+        } catch (error) {
+            console.error(error);
+            showToast("Failed to load group exam", "error");
+        }
+    },
+
+    async deleteGroup(groupId) {
+        if (confirm("Delete this Exam Group? (Original quizzes will NOT be deleted)")) {
+            await deleteDoc(doc(db, "exam_groups", groupId));
+            this.fetchExamGroups();
+        }
+    },
+
+    async generateGroupPDF(groupId) {
+        if (!window.jspdf || !window.jspdf.jsPDF) {
+            return showToast("PDF Library loading. Please try again in a few seconds.", "warning");
+        }
+
+        const group = this.globalExamGroups.find(g => g.id === groupId);
+        if (!group) return;
+
+        showToast("Generating Professional PDF...", "info");
+
+        try {
+            const { jsPDF } = window.jspdf;
+            const docPdf = new jsPDF();
+            
+            let allQuestions = [];
+            let answerKeyMap = {}; // Maps Topic -> Array of { qNum, answer }
+            let globalQNum = 1;
+
+            for (let qId of group.quizIds) {
+                const docSnap = await getDoc(doc(db, "quizzes", qId));
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    const topicName = data.metaTopic || "General";
+                    if (!answerKeyMap[topicName]) answerKeyMap[topicName] = [];
+
+                    (data.questions || []).forEach(q => {
+                        allQuestions.push(q);
+                        answerKeyMap[topicName].push({
+                            num: globalQNum,
+                            ans: q.answer
+                        });
+                        globalQNum++;
+                    });
+                }
+            }
+
+            // --- COVER PAGE ---
+            docPdf.setFontSize(22);
+            docPdf.text("QUIZ MASTER PRO", 105, 40, null, null, "center");
+            
+            docPdf.setFontSize(16);
+            docPdf.text(`Exam Group: ${group.groupName}`, 105, 60, null, null, "center");
+            
+            docPdf.setFontSize(12);
+            docPdf.text(`Subject: ${group.subject} | Class: ${group.class}`, 105, 75, null, null, "center");
+            docPdf.text(`Total Questions: ${allQuestions.length} | Total Marks: ${group.totalMarks}`, 105, 85, null, null, "center");
+            docPdf.text(`Topics: ${group.topics}`, 105, 95, { maxWidth: 150, align: "center" });
+            
+            docPdf.setFontSize(10);
+            docPdf.text(`Generated on: ${new Date().toLocaleDateString()}`, 105, 120, null, null, "center");
+
+            // --- QUESTIONS PAGES ---
+            docPdf.addPage();
+            docPdf.setFontSize(14);
+            docPdf.text("QUESTION BANK", 14, 20);
+            docPdf.setFontSize(11);
+
+            let yPos = 30;
+            const pageHeight = docPdf.internal.pageSize.height;
+
+            const stripHtml = (html) => {
+                let tmp = document.createElement("DIV");
+                tmp.innerHTML = html;
+                return tmp.textContent || tmp.innerText || "";
+            };
+
+            allQuestions.forEach((q, idx) => {
+                if (yPos > pageHeight - 40) {
+                    docPdf.addPage();
+                    yPos = 20;
+                }
+                
+                const qText = `${idx + 1}. ${stripHtml(q.text)}`;
+                const splitQ = docPdf.splitTextToSize(qText, 180);
+                docPdf.text(splitQ, 14, yPos);
+                yPos += (splitQ.length * 6);
+
+                const letters = ['A', 'B', 'C', 'D'];
+                q.options.forEach((opt, oIdx) => {
+                    const optText = `${letters[oIdx]}. ${stripHtml(opt)}`;
+                    docPdf.text(optText, 20, yPos);
+                    yPos += 6;
+                });
+                
+                yPos += 5; // Spacing between questions
+            });
+
+            // --- ANSWER KEY PAGE ---
+            docPdf.addPage();
+            docPdf.setFontSize(14);
+            docPdf.text("ANSWER KEY (TOPIC-WISE)", 14, 20);
+            yPos = 30;
+
+            docPdf.setFontSize(10);
+            for (const [topic, answers] of Object.entries(answerKeyMap)) {
+                if (yPos > pageHeight - 30) {
+                    docPdf.addPage();
+                    yPos = 20;
+                }
+                docPdf.setFont(undefined, 'bold');
+                docPdf.text(`--- ${topic.toUpperCase()} ---`, 14, yPos);
+                docPdf.setFont(undefined, 'normal');
+                yPos += 7;
+
+                answers.forEach(ansObj => {
+                    if (yPos > pageHeight - 20) {
+                        docPdf.addPage();
+                        yPos = 20;
+                    }
+                    docPdf.text(`${ansObj.num}. ${stripHtml(ansObj.ans)}`, 20, yPos);
+                    yPos += 6;
+                });
+                yPos += 5;
+            }
+
+            docPdf.save(`${group.groupName.replace(/[^a-zA-Z0-9]/g, '_')}_QuestionBank.pdf`);
+            showToast("PDF Downloaded successfully!", "success");
+
+        } catch (err) {
+            console.error("PDF Gen Error:", err);
+            showToast("Error generating PDF.", "error");
+        }
+    }
+};
+
+// Initialize V20 Module on Load alongside others
+window.addEventListener('load', () => {
+    setTimeout(() => {
+        EnterpriseV20Module.init();
+    }, 500); // Slight delay to ensure DOM and prior modules are ready
+});

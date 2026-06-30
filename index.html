@@ -12,6 +12,8 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.4.4/lz-string.min.js"></script>
   <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
 </head>
 <body>
 
@@ -270,9 +272,28 @@
 </div>
 
 <div id="v18-enterprise-import-ui" style="display: none; padding: 20px; background: var(--secondary); border-radius: var(--radius); margin-top: 20px;">
-    <h3>📊 Enterprise Import (XLSX, CSV, ODS)</h3>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
+        <h3>📊 Enterprise Import (XLSX, CSV, ODS)</h3>
+        <button id="v20-download-template" class="btn-primary" style="font-size: 0.9rem;"><i class="ri-file-excel-2-line"></i> Download Template</button>
+    </div>
     <input type="file" id="v18-excel-upload" accept=".xlsx, .xls, .csv, .ods" style="margin-bottom: 15px;">
     <div id="v18-import-stats" style="font-size: 0.9rem; color: var(--text-light);"></div>
+</div>
+
+<div class="library-controls" style="margin-top: 20px; border-top: 1px solid var(--border); padding-top: 15px;">
+    <button id="v20-tab-quizzes" class="btn-primary" style="flex: 1;">📚 Individual Quizzes</button>
+    <button id="v20-tab-groups" class="btn-secondary" style="flex: 1;">📦 Exam Groups (Combined)</button>
+</div>
+
+<div id="v20-group-manager-panel" class="hidden" style="margin-top: 20px;">
+    <div class="section-header" style="background: var(--surface); padding: 15px; border-radius: var(--radius); margin-bottom: 15px;">
+        <h4 style="margin:0;">Create New Exam Group</h4>
+        <div style="display: flex; gap: 10px; margin-top: 10px;">
+            <input type="text" id="v20-group-name" placeholder="Exam Group Name (e.g., 10th English Full)" style="flex: 2;">
+            <button id="v20-create-group-btn" class="btn-accent" style="flex: 1;">Merge Selected Quizzes</button>
+        </div>
+    </div>
+    <div id="v20-group-grid" class="library-grid"></div>
 </div>
 
 <div id="v18-analytics-modal" class="modal-overlay hidden" style="position: fixed; inset: 0; background: rgba(0,0,0,0.9); z-index: 9999; justify-content: center; align-items: center;">
