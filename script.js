@@ -250,7 +250,7 @@ const EnterpriseModule = {
         }
     },
 
- handleExcelImport(event) {
+handleExcelImport(event) {
         const file = event.target.files[0];
         if (!file || !window.XLSX) return;
 
@@ -258,12 +258,26 @@ const EnterpriseModule = {
         reader.onload = (e) => {
             try {
                 const data = new Uint8Array(e.target.result);
-                const workbook = XLSX.read(data, {type: 'array'});
+                // ENABLE cellStyles: true to capture formatting, colors, and rich text runs
+                const workbook = XLSX.read(data, {type: 'array', cellStyles: true});
                 const firstSheetName = workbook.SheetNames[0];
                 const worksheet = workbook.Sheets[firstSheetName];
                 
-                // Read as raw arrays first to detect headers dynamically
-                const rawRows = XLSX.utils.sheet_to_json(worksheet, {header: 1, defval: ""});
+                // Read grid manually to process Rich Text instead of using plain string conversion
+                const rawRows = [];
+                if (worksheet['!ref']) {
+                    const range = XLSX.utils.decode_range(worksheet['!ref']);
+                    for (let R = range.s.r; R <= range.e.r; ++R) {
+                        const row = [];
+                        for (let C = range.s.c; C <= range.e.c; ++C) {
+                            const cellAddress = XLSX.utils.encode_cell({c: C, r: R});
+                            const cell = worksheet[cellAddress];
+                            row.push(cell ? this.excelCellToHTML(cell) : "");
+                        }
+                        rawRows.push(row);
+                    }
+                }
+                
                 if (rawRows.length < 2) throw new Error("File seems empty or missing data.");
                 
                 this.processEnterpriseQuestions(rawRows);
@@ -272,6 +286,102 @@ const EnterpriseModule = {
             }
         };
         reader.readAsArrayBuffer(file);
+    },
+
+    // NEW HELPER FUNCTION: Convert SheetJS Cell Styles to Safe HTML
+    excelCellToHTML(cell) {
+        if (!cell) return "";
+        
+        // 1. Process Rich Text Runs (Mixed Formatting in single cell)
+        if (cell.r && Array.isArray(cell.r)) {
+            let html = "";
+            cell.r.forEach(run => {
+                let text = run.t;
+                if (!text) return;
+                
+                // Escape base text characters to prevent accidental tag rendering
+                text = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                
+                if (run.font) {
+                    if (run.font.bold) text = `<b>${text}</b>`;
+                    if (run.font.italic) text = `<i>${text}</i>`;
+                    if (run.font.underline) text = `<u>${text}</u>`;
+                    if (run.font.vertAlign === 'superscript') text = `<sup>${text}</sup>`;
+                    if (run.font.vertAlign === 'subscript') text = `<sub>${text}</sub>`;
+                    
+                    let styleStr = "";
+                    if (run.font.color && run.font.color.rgb) {
+                        let color = run.font.color.rgb;
+                        if (color.length === 8) color = "#" + color.substring(2); // Strip ARGB alpha channel
+                        else color = "#" + color;
+                        styleStr += `color:${color};`;
+                    }
+                    if (styleStr) {
+                        text = `<span style="${styleStr}">${text}</span>`;
+                    }
+                }
+                html += text;
+            });
+            return html;
+        }
+        
+        // 2. Fallback: Process Cell-Level formatting for plain cells
+        let val = cell.w !== undefined ? cell.w : (cell.v !== undefined ? String(cell.v) : "");
+        val = val.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        
+        if (cell.s && cell.s.font) {
+            if (cell.s.font.bold) val = `<b>${val}</b>`;
+            if (cell.s.font.italic) val = `<i>${val}</i>`;
+            if (cell.s.font.underline) val = `<u>${val}</u>`;
+            if (cell.s.font.vertAlign === 'superscript') val = `<sup>${val}</sup>`;
+            if (cell.s.font.vertAlign === 'subscript') val = `<sub>${val}</sub>`;
+            
+            let styleStr = "";
+            if (cell.s.font.color && cell.s.font.color.rgb) {
+                let color = cell.s.font.color.rgb;
+                if (color.length === 8) color = "#" + color.substring(2);
+                else color = "#" + color;
+                styleStr += `color:${color};`;
+            }
+            if (cell.s.fill && cell.s.fill.fgColor && cell.s.fill.fgColor.rgb) {
+                let bg = cell.s.fill.fgColor.rgb;
+                if (bg.length === 8) bg = "#" + bg.substring(2);
+                else bg = "#" + bg;
+                styleStr += `background-color:${bg};`;
+            }
+            if (styleStr) {
+                val = `<span style="${styleStr}">${val}</span>`;
+            }
+        }
+        
+        return val;
+    },
+
+    // UPDATED SANITIZER: Allows newly mapped Rich Text HTML Tags
+    sanitizeHTML(str) {
+        if (!str) return "";
+        const temp = document.createElement('div');
+        temp.textContent = str;
+        let safeStr = temp.innerHTML;
+        
+        // Allowed inline formatting tags
+        const allowedTags = ['b', 'strong', 'i', 'em', 'u', 'sup', 'sub'];
+        allowedTags.forEach(tag => {
+            safeStr = safeStr.replace(new RegExp(`&lt;${tag}&gt;`, 'gi'), `<${tag}>`);
+            safeStr = safeStr.replace(new RegExp(`&lt;\\/${tag}&gt;`, 'gi'), `</${tag}>`);
+        });
+        
+        safeStr = safeStr.replace(/&lt;br\s*\/?&gt;/gi, '<br>');
+        
+        // Allow ONLY styles attached to spans (Colors and Background-Colors mapped from Excel)
+        safeStr = safeStr.replace(/&lt;span style=(?:&quot;|"|')([^"&']+)(?:&quot;|"|')&gt;/gi, (match, styleContent) => {
+            // Strip any unsafe injection properties from the style attribute itself
+            const safeStyle = styleContent.replace(/[^a-zA-Z0-9:#;\-\s,()]/g, '');
+            return `<span style="${safeStyle}">`;
+        });
+        safeStr = safeStr.replace(/&lt;\/span&gt;/gi, '</span>');
+
+        return safeStr;
     },
 
     processEnterpriseQuestions(rawRows) {
