@@ -250,7 +250,7 @@ const EnterpriseModule = {
         }
     },
 
-handleExcelImport(event) {
+    handleExcelImport(event) {
         const file = event.target.files[0];
         if (!file || !window.XLSX) return;
 
@@ -288,7 +288,6 @@ handleExcelImport(event) {
         reader.readAsArrayBuffer(file);
     },
 
-    // NEW HELPER FUNCTION: Convert SheetJS Cell Styles to Safe HTML
     excelCellToHTML(cell) {
         if (!cell) return "";
         
@@ -357,7 +356,6 @@ handleExcelImport(event) {
         return val;
     },
 
-    // UPDATED SANITIZER: Allows newly mapped Rich Text HTML Tags
     sanitizeHTML(str) {
         if (!str) return "";
         const temp = document.createElement('div');
@@ -472,7 +470,8 @@ handleExcelImport(event) {
     },
 
     hashQuestion(qObj) {
-        const clean = (str) => str.toLowerCase().replace(/\s+/g, '').trim();
+        const stripHTML = (str) => str.replace(/<[^>]*>?/gm, '');
+        const clean = (str) => stripHTML(str).toLowerCase().replace(/\s+/g, '').trim();
         return clean(qObj.text) + '_' + qObj.options.map(clean).sort().join('_');
     },
 
@@ -489,6 +488,7 @@ handleExcelImport(event) {
         htmlPreview += `</tbody></table>`;
         $('csvTableContainer').innerHTML = htmlPreview;
     },
+    
     generateRandomExam(fullQuestionBank, count) {
         if (!fullQuestionBank || fullQuestionBank.length === 0) return [];
         
@@ -508,18 +508,6 @@ handleExcelImport(event) {
             quizData.questions = this.generateRandomExam(quizData.questions, requestedSize);
             quizData.totalMarks = quizData.questions.length;
         }
-    },
-
-    sanitizeHTML(str) {
-        if (!str) return "";
-        const temp = document.createElement('div');
-        temp.textContent = str;
-        let safeStr = temp.innerHTML;
-        safeStr = safeStr.replace(/&lt;b&gt;/gi, '<b>').replace(/&lt;\/b&gt;/gi, '</b>');
-        safeStr = safeStr.replace(/&lt;i&gt;/gi, '<i>').replace(/&lt;\/i&gt;/gi, '</i>');
-        safeStr = safeStr.replace(/&lt;u&gt;/gi, '<u>').replace(/&lt;\/u&gt;/gi, '</u>');
-        safeStr = safeStr.replace(/&lt;br\s*\/?&gt;/gi, '<br>');
-        return safeStr;
     },
 
     checkOfflineSession() {
@@ -683,12 +671,18 @@ function renderLibraryGrid() {
     const filterSub = $('filterSubject')?.value || 'all';
     const filterCls = $('filterClass')?.value || 'all';
 
+    const stripTags = (str) => str ? str.replace(/<[^>]*>?/gm, '') : '';
+
     grid.innerHTML = '';
 
     const filtered = globalQuizzes.filter(q => {
-        const matchesSearch = (q.metaExam || '').toLowerCase().includes(searchTerm) || 
-                              (q.metaTopic || '').toLowerCase().includes(searchTerm) ||
-                              (q.creatorName || '').toLowerCase().includes(searchTerm);
+        const cleanExam = stripTags(q.metaExam).toLowerCase();
+        const cleanTopic = stripTags(q.metaTopic).toLowerCase();
+        const cleanCreator = stripTags(q.creatorName).toLowerCase();
+        
+        const matchesSearch = cleanExam.includes(searchTerm) || 
+                              cleanTopic.includes(searchTerm) ||
+                              cleanCreator.includes(searchTerm);
         const matchesSub = filterSub === 'all' || q.metaSubject === filterSub;
         const matchesCls = filterCls === 'all' || q.metaClass === filterCls;
         return matchesSearch && matchesSub && matchesCls;
@@ -1009,6 +1003,7 @@ function beginQuizEngine() {
 
     if ($('studentLoginModal')) $('studentLoginModal').classList.add('hidden');
     if ($('librarySection')) $('librarySection').classList.add('hidden');
+    if ($('v20-group-manager-panel')) $('v20-group-manager-panel').classList.add('hidden');
     if ($('appContainer')) $('appContainer').style.paddingBottom = "0";
 
     EnterpriseModule.startAutoSaveSession();
@@ -1286,6 +1281,7 @@ styleSheet.innerText = `
   }
 `;
 document.head.appendChild(styleSheet);
+
 // ==========================================
 // V20 ENTERPRISE EXAM GROUP & EXPORT MODULE
 // ==========================================
@@ -1395,8 +1391,12 @@ const EnterpriseV20Module = {
 
     async createExamGroup() {
         const groupName = $('v20-group-name').value.trim();
+        const creatorPassword = $('creatorPassword')?.value.trim() || '';
+        const creatorEmail = $('creatorEmail')?.value.trim() || '';
+
         if (!groupName) return showToast("Enter an Exam Group Name.", "warning");
         if (this.selectedQuizIdsForGroup.size < 2) return showToast("Select at least 2 quizzes to group.", "warning");
+        if (!creatorPassword) return showToast("Set a Creator Password in the Creator Studio to secure this group.", "warning");
 
         const selectedQuizzes = globalQuizzes.filter(q => this.selectedQuizIdsForGroup.has(q.id));
         
@@ -1419,7 +1419,10 @@ const EnterpriseV20Module = {
             subject: selectedQuizzes[0].metaSubject || 'Mixed',
             class: selectedQuizzes[0].metaClass || 'Mixed',
             creator: localStorage.getItem('creatorName') || 'Unknown',
-            createdAt: serverTimestamp()
+            creatorPassword: creatorPassword,
+            creatorEmail: creatorEmail,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
         };
 
         try {
@@ -1461,7 +1464,7 @@ const EnterpriseV20Module = {
                     <div class="group-actions">
                         <button class="btn-sm btn-primary" onclick="EnterpriseV20Module.playGroup('${doc.id}')"><i class="ri-play-fill"></i> Play</button>
                         <button class="btn-sm btn-accent" onclick="EnterpriseV20Module.generateGroupPDF('${doc.id}')"><i class="ri-file-pdf-line"></i> PDF</button>
-                        <button class="btn-sm btn-secondary" onclick="EnterpriseV20Module.deleteGroup('${doc.id}')" style="color:var(--danger);"><i class="ri-delete-bin-line"></i></button>
+                        <button class="btn-sm btn-secondary" onclick="EnterpriseV20Module.deleteGroup('${doc.id}', '${data.creatorPassword || ''}')" style="color:var(--danger);"><i class="ri-delete-bin-line"></i></button>
                     </div>
                 `;
                 grid.appendChild(card);
@@ -1485,6 +1488,7 @@ const EnterpriseV20Module = {
         try {
             let combinedQuestions = [];
             let combinedMinutes = 0;
+            let missingCount = 0;
 
             for (let qId of group.quizIds) {
                 const docSnap = await getDoc(doc(db, "quizzes", qId));
@@ -1492,7 +1496,13 @@ const EnterpriseV20Module = {
                     const data = docSnap.data();
                     combinedQuestions = combinedQuestions.concat(data.questions || []);
                     combinedMinutes += parseInt(data.totalMinutes || 0);
+                } else {
+                    missingCount++;
                 }
+            }
+            
+            if (missingCount > 0) {
+                showToast(`Warning: ${missingCount} quiz(zes) were unavailable and skipped.`, "warning");
             }
 
             if (combinedQuestions.length === 0) throw new Error("No questions found in referenced quizzes.");
@@ -1512,6 +1522,7 @@ const EnterpriseV20Module = {
             };
 
             $('librarySection').classList.add('hidden');
+            $('v20-group-manager-panel').classList.add('hidden');
             $('studentLoginModal').classList.remove('hidden');
 
         } catch (error) {
@@ -1520,10 +1531,21 @@ const EnterpriseV20Module = {
         }
     },
 
-    async deleteGroup(groupId) {
+    async deleteGroup(groupId, correctPwd) {
+        const pwd = prompt("Enter the Creator Password to delete this group:");
+        if (pwd === null) return;
+        if (pwd !== correctPwd && correctPwd !== '') {
+            return showToast("Incorrect Password", "error");
+        }
+        
         if (confirm("Delete this Exam Group? (Original quizzes will NOT be deleted)")) {
-            await deleteDoc(doc(db, "exam_groups", groupId));
-            this.fetchExamGroups();
+            try {
+                await deleteDoc(doc(db, "exam_groups", groupId));
+                showToast("Group deleted successfully.", "success");
+                this.fetchExamGroups();
+            } catch (err) {
+                showToast("Error deleting group.", "error");
+            }
         }
     },
 
