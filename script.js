@@ -258,12 +258,10 @@ const EnterpriseModule = {
         reader.onload = (e) => {
             try {
                 const data = new Uint8Array(e.target.result);
-                // ENABLE cellStyles: true to capture formatting, colors, and rich text runs
                 const workbook = XLSX.read(data, {type: 'array', cellStyles: true});
                 const firstSheetName = workbook.SheetNames[0];
                 const worksheet = workbook.Sheets[firstSheetName];
                 
-                // Read grid manually to process Rich Text instead of using plain string conversion
                 const rawRows = [];
                 if (worksheet['!ref']) {
                     const range = XLSX.utils.decode_range(worksheet['!ref']);
@@ -291,15 +289,12 @@ const EnterpriseModule = {
     excelCellToHTML(cell) {
         if (!cell) return "";
         
-        // 1. Process Rich Text Runs (Mixed Formatting in single cell)
+        // 1. Process Rich Text Runs
         if (cell.r && Array.isArray(cell.r)) {
             let html = "";
             cell.r.forEach(run => {
                 let text = run.t;
                 if (!text) return;
-                
-                // Escape base text characters to prevent accidental tag rendering
-                text = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
                 
                 if (run.font) {
                     if (run.font.bold) text = `<b>${text}</b>`;
@@ -311,7 +306,7 @@ const EnterpriseModule = {
                     let styleStr = "";
                     if (run.font.color && run.font.color.rgb) {
                         let color = run.font.color.rgb;
-                        if (color.length === 8) color = "#" + color.substring(2); // Strip ARGB alpha channel
+                        if (color.length === 8) color = "#" + color.substring(2); 
                         else color = "#" + color;
                         styleStr += `color:${color};`;
                     }
@@ -326,7 +321,6 @@ const EnterpriseModule = {
         
         // 2. Fallback: Process Cell-Level formatting for plain cells
         let val = cell.w !== undefined ? cell.w : (cell.v !== undefined ? String(cell.v) : "");
-        val = val.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
         
         if (cell.s && cell.s.font) {
             if (cell.s.font.bold) val = `<b>${val}</b>`;
@@ -362,7 +356,6 @@ const EnterpriseModule = {
         temp.textContent = str;
         let safeStr = temp.innerHTML;
         
-        // Allowed inline formatting tags
         const allowedTags = ['b', 'strong', 'i', 'em', 'u', 'sup', 'sub'];
         allowedTags.forEach(tag => {
             safeStr = safeStr.replace(new RegExp(`&lt;${tag}&gt;`, 'gi'), `<${tag}>`);
@@ -371,10 +364,9 @@ const EnterpriseModule = {
         
         safeStr = safeStr.replace(/&lt;br\s*\/?&gt;/gi, '<br>');
         
-        // Allow ONLY styles attached to spans (Colors and Background-Colors mapped from Excel)
+        // Ensure complex styles are preserved securely (colors, hex, rgba, etc.)
         safeStr = safeStr.replace(/&lt;span style=(?:&quot;|"|')([^"&']+)(?:&quot;|"|')&gt;/gi, (match, styleContent) => {
-            // Strip any unsafe injection properties from the style attribute itself
-            const safeStyle = styleContent.replace(/[^a-zA-Z0-9:#;\-\s,()]/g, '');
+            const safeStyle = styleContent.replace(/[^a-zA-Z0-9:#;\-\s,().%!]/g, '');
             return `<span style="${safeStyle}">`;
         });
         safeStr = safeStr.replace(/&lt;\/span&gt;/gi, '</span>');
@@ -387,7 +379,6 @@ const EnterpriseModule = {
         const processedBank = csvParsedQuestions || [];
         const existingQuestionHashes = new Set(processedBank.map(q => this.hashQuestion(q)));
 
-        // Header Mapping Intelligence
         const headers = rawRows[0].map(h => h.toString().toLowerCase().replace(/[^a-z0-9]/g, ''));
         
         const getColIndex = (aliases) => {
@@ -428,7 +419,6 @@ const EnterpriseModule = {
 
             const answer = colMap.ans !== -1 ? row[colMap.ans]?.toString().trim() : '';
 
-            // Validation
             if (options.length < 2) { errors++; continue; }
             if (!answer || !options.includes(answer)) { errors++; continue; }
 
@@ -463,7 +453,6 @@ const EnterpriseModule = {
         if (csvParsedQuestions.length > 0) {
             $('manualSection').classList.add('hidden');
             $('csvPreview').classList.remove('hidden');
-            // Mock CSV preview update for seamless UX integration
             this.forceRenderCSVPreview();
             showToast(`Successfully imported ${imported} new questions.`, 'success');
         }
@@ -962,19 +951,68 @@ function testQuizLocally(source) {
 // 13. QUIZ ENGINE - FETCH & LOGIN
 async function fetchAndStartSharedQuiz(quizId) {
     try {
-        const docRef = doc(db, "quizzes", quizId);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-            currentQuizData = docSnap.data();
-            currentQuizData.id = docSnap.id;
-            $('studentLoginModal').classList.remove('hidden');
+        if (quizId.startsWith('group_')) {
+            const actualGroupId = quizId.replace('group_', '');
+            const docSnap = await getDoc(doc(db, "exam_groups", actualGroupId));
+            
+            if (docSnap.exists()) {
+                const group = docSnap.data();
+                let combinedQuestions = [];
+                let combinedMinutes = 0;
+                let maxPerQTimer = 0;
+
+                for (let qId of group.quizIds) {
+                    const qSnap = await getDoc(doc(db, "quizzes", qId));
+                    if (qSnap.exists()) {
+                        const data = qSnap.data();
+                        combinedQuestions = combinedQuestions.concat(data.questions || []);
+                        combinedMinutes += parseInt(data.totalMinutes || 0);
+                        if (data.perQuestionSeconds > maxPerQTimer) {
+                            maxPerQTimer = parseInt(data.perQuestionSeconds);
+                        }
+                    }
+                }
+                
+                if (combinedQuestions.length === 0) {
+                    showToast("No questions found in this group exam.", "error");
+                    $('librarySection').classList.remove('hidden');
+                    return;
+                }
+
+                currentQuizData = {
+                    id: quizId,
+                    metaExam: group.groupName,
+                    metaSubject: group.subject,
+                    metaClass: group.class,
+                    totalMarks: group.totalMarks,
+                    totalMinutes: combinedMinutes,
+                    questions: combinedQuestions,
+                    shuffleQuestions: true,
+                    perQuestionSeconds: maxPerQTimer,
+                    minPassMarks: Math.floor(group.totalMarks * 0.4) 
+                };
+                
+                $('studentLoginModal').classList.remove('hidden');
+            } else {
+                showToast("Exam Group not found or deleted.", "error");
+                $('librarySection').classList.remove('hidden');
+            }
         } else {
-            showToast("Quiz not found or deleted.", "error");
-            $('librarySection').classList.remove('hidden');
+            const docRef = doc(db, "quizzes", quizId);
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+                currentQuizData = docSnap.data();
+                currentQuizData.id = docSnap.id;
+                $('studentLoginModal').classList.remove('hidden');
+            } else {
+                showToast("Quiz not found or deleted.", "error");
+                $('librarySection').classList.remove('hidden');
+            }
         }
     } catch (error) {
         console.error(error);
         showToast("Error fetching quiz link.", "error");
+        $('librarySection').classList.remove('hidden');
     }
 }
 
@@ -1340,7 +1378,7 @@ const EnterpriseV20Module = {
         } else {
             tabGroups.className = 'btn-primary';
             tabQuizzes.className = 'btn-secondary';
-            gridQuizzes.classList.remove('hidden'); // Keep visible for selection
+            gridQuizzes.classList.remove('hidden'); 
             panelGroups.classList.remove('hidden');
             this.enableMultiSelectMode();
         }
@@ -1356,7 +1394,6 @@ const EnterpriseV20Module = {
 
             card.classList.add('quiz-card-selectable');
             
-            // Inject selection indicator if not present
             if (!card.querySelector('.select-indicator')) {
                 const indicator = document.createElement('div');
                 indicator.className = 'select-indicator';
@@ -1365,7 +1402,6 @@ const EnterpriseV20Module = {
             }
 
             card.onclick = (e) => {
-                // Prevent trigger if clicking action buttons
                 if (e.target.closest('button')) return; 
                 
                 if (this.selectedQuizIdsForGroup.has(quizId)) {
@@ -1463,6 +1499,7 @@ const EnterpriseV20Module = {
                     <div class="card-sub">Topics: <small>${data.topics}</small></div>
                     <div class="group-actions">
                         <button class="btn-sm btn-primary" onclick="EnterpriseV20Module.playGroup('${doc.id}')"><i class="ri-play-fill"></i> Play</button>
+                        <button class="btn-sm btn-secondary" onclick="window.shareExistingQuiz('group_${doc.id}')"><i class="ri-share-line"></i> Share</button>
                         <button class="btn-sm btn-accent" onclick="EnterpriseV20Module.generateGroupPDF('${doc.id}')"><i class="ri-file-pdf-line"></i> PDF</button>
                         <button class="btn-sm btn-secondary" onclick="EnterpriseV20Module.deleteGroup('${doc.id}', '${data.creatorPassword || ''}')" style="color:var(--danger);"><i class="ri-delete-bin-line"></i></button>
                     </div>
@@ -1489,6 +1526,7 @@ const EnterpriseV20Module = {
             let combinedQuestions = [];
             let combinedMinutes = 0;
             let missingCount = 0;
+            let maxPerQTimer = 0;
 
             for (let qId of group.quizIds) {
                 const docSnap = await getDoc(doc(db, "quizzes", qId));
@@ -1496,6 +1534,9 @@ const EnterpriseV20Module = {
                     const data = docSnap.data();
                     combinedQuestions = combinedQuestions.concat(data.questions || []);
                     combinedMinutes += parseInt(data.totalMinutes || 0);
+                    if (data.perQuestionSeconds > maxPerQTimer) {
+                        maxPerQTimer = parseInt(data.perQuestionSeconds);
+                    }
                 } else {
                     missingCount++;
                 }
@@ -1507,7 +1548,6 @@ const EnterpriseV20Module = {
 
             if (combinedQuestions.length === 0) throw new Error("No questions found in referenced quizzes.");
 
-            // Construct unified mock Quiz Data for the engine
             currentQuizData = {
                 id: `group_${groupId}`,
                 metaExam: group.groupName,
@@ -1516,9 +1556,9 @@ const EnterpriseV20Module = {
                 totalMarks: group.totalMarks,
                 totalMinutes: combinedMinutes,
                 questions: combinedQuestions,
-                shuffleQuestions: true, // Auto-shuffle for groups
-                perQuestionSeconds: 0,
-                minPassMarks: Math.floor(group.totalMarks * 0.4) // 40% default pass
+                shuffleQuestions: true, 
+                perQuestionSeconds: maxPerQTimer,
+                minPassMarks: Math.floor(group.totalMarks * 0.4) 
             };
 
             $('librarySection').classList.add('hidden');
@@ -1550,21 +1590,14 @@ const EnterpriseV20Module = {
     },
 
     async generateGroupPDF(groupId) {
-        if (!window.jspdf || !window.jspdf.jsPDF) {
-            return showToast("PDF Library loading. Please try again in a few seconds.", "warning");
-        }
-
         const group = this.globalExamGroups.find(g => g.id === groupId);
         if (!group) return;
 
-        showToast("Generating Professional PDF...", "info");
+        showToast("Generating Professional Print/PDF View...", "info");
 
         try {
-            const { jsPDF } = window.jspdf;
-            const docPdf = new jsPDF();
-            
             let allQuestions = [];
-            let answerKeyMap = {}; // Maps Topic -> Array of { qNum, answer }
+            let answerKeyMap = {};
             let globalQNum = 1;
 
             for (let qId of group.quizIds) {
@@ -1585,87 +1618,72 @@ const EnterpriseV20Module = {
                 }
             }
 
-            // --- COVER PAGE ---
-            docPdf.setFontSize(22);
-            docPdf.text("QUIZ MASTER PRO", 105, 40, null, null, "center");
-            
-            docPdf.setFontSize(16);
-            docPdf.text(`Exam Group: ${group.groupName}`, 105, 60, null, null, "center");
-            
-            docPdf.setFontSize(12);
-            docPdf.text(`Subject: ${group.subject} | Class: ${group.class}`, 105, 75, null, null, "center");
-            docPdf.text(`Total Questions: ${allQuestions.length} | Total Marks: ${group.totalMarks}`, 105, 85, null, null, "center");
-            docPdf.text(`Topics: ${group.topics}`, 105, 95, { maxWidth: 150, align: "center" });
-            
-            docPdf.setFontSize(10);
-            docPdf.text(`Generated on: ${new Date().toLocaleDateString()}`, 105, 120, null, null, "center");
-
-            // --- QUESTIONS PAGES ---
-            docPdf.addPage();
-            docPdf.setFontSize(14);
-            docPdf.text("QUESTION BANK", 14, 20);
-            docPdf.setFontSize(11);
-
-            let yPos = 30;
-            const pageHeight = docPdf.internal.pageSize.height;
-
-            const stripHtml = (html) => {
-                let tmp = document.createElement("DIV");
-                tmp.innerHTML = html;
-                return tmp.textContent || tmp.innerText || "";
-            };
-
-            allQuestions.forEach((q, idx) => {
-                if (yPos > pageHeight - 40) {
-                    docPdf.addPage();
-                    yPos = 20;
-                }
-                
-                const qText = `${idx + 1}. ${stripHtml(q.text)}`;
-                const splitQ = docPdf.splitTextToSize(qText, 180);
-                docPdf.text(splitQ, 14, yPos);
-                yPos += (splitQ.length * 6);
-
-                const letters = ['A', 'B', 'C', 'D'];
-                q.options.forEach((opt, oIdx) => {
-                    const optText = `${letters[oIdx]}. ${stripHtml(opt)}`;
-                    docPdf.text(optText, 20, yPos);
-                    yPos += 6;
-                });
-                
-                yPos += 5; // Spacing between questions
-            });
-
-            // --- ANSWER KEY PAGE ---
-            docPdf.addPage();
-            docPdf.setFontSize(14);
-            docPdf.text("ANSWER KEY (TOPIC-WISE)", 14, 20);
-            yPos = 30;
-
-            docPdf.setFontSize(10);
-            for (const [topic, answers] of Object.entries(answerKeyMap)) {
-                if (yPos > pageHeight - 30) {
-                    docPdf.addPage();
-                    yPos = 20;
-                }
-                docPdf.setFont(undefined, 'bold');
-                docPdf.text(`--- ${topic.toUpperCase()} ---`, 14, yPos);
-                docPdf.setFont(undefined, 'normal');
-                yPos += 7;
-
-                answers.forEach(ansObj => {
-                    if (yPos > pageHeight - 20) {
-                        docPdf.addPage();
-                        yPos = 20;
-                    }
-                    docPdf.text(`${ansObj.num}. ${stripHtml(ansObj.ans)}`, 20, yPos);
-                    yPos += 6;
-                });
-                yPos += 5;
+            // Using native window print allows 100% flawless CSS/HTML rendering natively vs jsPDF text extraction
+            const printWindow = window.open('', '_blank');
+            if (!printWindow) {
+                showToast("Please allow pop-ups to generate PDF/Print.", "warning");
+                return;
             }
 
-            docPdf.save(`${group.groupName.replace(/[^a-zA-Z0-9]/g, '_')}_QuestionBank.pdf`);
-            showToast("PDF Downloaded successfully!", "success");
+            let html = `<!DOCTYPE html><html><head><title>${group.groupName} - Question Bank</title>
+            <style>
+                body { font-family: 'Inter', sans-serif; line-height: 1.6; padding: 30px; color: #000; background: #fff; }
+                .header { text-align: center; margin-bottom: 40px; border-bottom: 2px solid #000; padding-bottom: 20px; }
+                h1, h2, h3, p { margin: 5px 0; }
+                .q-container { margin-bottom: 25px; page-break-inside: avoid; }
+                .q-text { font-size: 1.1em; font-weight: bold; margin-bottom: 10px; }
+                .options { margin-left: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+                .ans-key { page-break-before: always; }
+                .topic-title { margin-top: 20px; font-weight: bold; text-transform: uppercase; border-bottom: 1px solid #ccc; padding-bottom: 5px; }
+                @media print { body { padding: 0; } }
+            </style></head><body>
+            
+            <div class="header">
+                <h2>QUIZ MASTER PRO</h2>
+                <h1>${group.groupName}</h1>
+                <p><b>Subject:</b> ${group.subject} &nbsp;&nbsp;|&nbsp;&nbsp; <b>Class:</b> ${group.class}</p>
+                <p><b>Total Questions:</b> ${allQuestions.length} &nbsp;&nbsp;|&nbsp;&nbsp; <b>Total Marks:</b> ${group.totalMarks}</p>
+                <p><b>Topics:</b> ${group.topics}</p>
+            </div>
+            
+            <div class="questions-section">
+                <h3>QUESTION BANK</h3><hr><br>`;
+
+            allQuestions.forEach((q, idx) => {
+                html += `
+                <div class="q-container">
+                    <div class="q-text">${idx + 1}. ${q.text}</div>
+                    <div class="options">
+                        <div><b>A.</b> ${q.options[0] || ''}</div>
+                        <div><b>B.</b> ${q.options[1] || ''}</div>
+                        <div><b>C.</b> ${q.options[2] || ''}</div>
+                        <div><b>D.</b> ${q.options[3] || ''}</div>
+                    </div>
+                </div>`;
+            });
+
+            html += `
+            </div>
+            <div class="ans-key">
+                <div class="header"><h2>ANSWER KEY (TOPIC-WISE)</h2></div>`;
+
+            for (const [topic, answers] of Object.entries(answerKeyMap)) {
+                html += `<div class="topic-title">${topic}</div><ul style="list-style:none; padding-left:0;">`;
+                answers.forEach(ansObj => {
+                    html += `<li style="margin-bottom: 5px;"><b>${ansObj.num}.</b> ${ansObj.ans}</li>`;
+                });
+                html += `</ul>`;
+            }
+
+            html += `</div></body></html>`;
+
+            printWindow.document.write(html);
+            printWindow.document.close();
+            printWindow.focus();
+            
+            setTimeout(() => {
+                printWindow.print();
+            }, 800);
 
         } catch (err) {
             console.error("PDF Gen Error:", err);
@@ -1674,9 +1692,8 @@ const EnterpriseV20Module = {
     }
 };
 
-// Initialize V20 Module on Load alongside others
 window.addEventListener('load', () => {
     setTimeout(() => {
         EnterpriseV20Module.init();
-    }, 500); // Slight delay to ensure DOM and prior modules are ready
+    }, 500); 
 });
